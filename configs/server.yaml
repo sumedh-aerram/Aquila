@@ -1,0 +1,12 @@
+server:
+  addr: ":8080"
+  shutdown_timeout: 10s
+
+log:
+  level: info
+  format: json
+
+postgres:
+  url: postgres://aquila:aquila@127.0.0.1:15432/aquila?sslmode=disable
+  max_conns: 8
+  connect_timeout: 5s

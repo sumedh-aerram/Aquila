@@ -1,0 +1,53 @@
+# Binaries
+/bin/
+/dist/
+/out/
+*.exe
+*.test
+*.out
+
+# Go
+coverage.out
+coverage.html
+vendor/
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Compose / data
+*.log
+
+# Working notes and agent config — keep locally, do not publish
+/AGENTS.md
+/PROJECT_STATE.md
+/.cursor/
+/docs/*
+!/docs/SECURITY.md
+
+# Empty phase placeholders
+**/.gitkeep
+/benchmarks/
+/chaos/
+/executor/
+/proto/
+/web/
+/deploy/terraform/
+/deploy/kubernetes/
+/internal/cas/
+/internal/traces/
+/internal/artifacts/
+/internal/cache/
+/internal/auth/
+/internal/dag/
+/internal/graph/
+/internal/scheduler/
+/internal/agent/
+/internal/lease/

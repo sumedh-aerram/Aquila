@@ -1,0 +1,10 @@
+BEGIN;
+DROP TABLE IF EXISTS payments;
+DROP TABLE IF EXISTS checkout_items;
+DROP TABLE IF EXISTS checkouts;
+DROP TABLE IF EXISTS inventory_mutex;
+DROP TABLE IF EXISTS inventory_events;
+DROP TABLE IF EXISTS items;
+DROP TABLE IF EXISTS user_addresses;
+DROP TABLE IF EXISTS users;
+COMMIT;

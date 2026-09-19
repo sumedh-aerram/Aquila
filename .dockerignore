@@ -1,0 +1,14 @@
+.git
+bin
+dist
+out
+**/.DS_Store
+*.md
+docs
+web
+examples
+benchmarks
+chaos
+deploy/terraform
+deploy/kubernetes
+.github

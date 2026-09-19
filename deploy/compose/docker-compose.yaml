@@ -1,0 +1,116 @@
+name: aquila
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aquila
+      POSTGRES_PASSWORD: aquila
+      POSTGRES_DB: aquila
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - aquila_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aquila -d aquila"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - aquila
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../../migrations:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://aquila:aquila@postgres:5432/aquila?sslmode=disable
+      - up
+    networks:
+      - aquila
+    restart: "no"
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.122.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP
+      - "127.0.0.1:8889:8889" # Prometheus exporter
+    networks:
+      - aquila
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - aquila_prom:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - otel-collector
+    networks:
+      - aquila
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: aquila
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - aquila_grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:13000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - aquila
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      AQUILA_CONFIG: /etc/aquila/server.yaml
+      AQUILA_POSTGRES_URL: postgres://aquila:aquila@postgres:5432/aquila?sslmode=disable
+      AQUILA_LOG_LEVEL: info
+      AQUILA_LOG_FORMAT: json
+      AQUILA_SERVER_ADDR: ":8080"
+    volumes:
+      - ../../configs/server.yaml:/etc/aquila/server.yaml:ro
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - aquila
+
+networks:
+  aquila:
+
+volumes:
+  aquila_pg:
+  aquila_prom:
+  aquila_grafana:
