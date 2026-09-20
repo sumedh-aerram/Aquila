@@ -1,235 +1,108 @@
 # Aquila
 
-**Production-aware agentic software engineer.**
+**Runtime CI for distributed backends.**
 
-Aquila understands how a distributed application behaves at runtime, determines the blast radius of a proposed change, applies the patch, and validates it against production-shaped experiments before presenting evidence.
+Your tests passed. Checkout is still slow. The agent that wrote the patch never saw a trace.
 
-Repository-only coding agents see source, tests, and terminal output. That is necessary. It is not sufficient. They cannot answer the question that actually matters after a change to checkout, payment, or inventory:
+Aquila sits on the running system. It records how requests actually move (OpenTelemetry), maps that path back to code, and is being built to keep a patch off `main` until baseline vs patch experiments say the behavior you cared about did not regress.
 
-> Did this patch change runtime behavior in a way we can measure — and is that change safe?
+Git is source. Traces are runtime. Aquila is the join.
 
-Aquila is built to answer that question with artifacts, not vibes.
+## Run it
 
-## What Aquila does
-
-Given an engineering objective such as `reduce checkout p95 latency`, Aquila:
-
-1. Reconstructs the **running system** from OpenTelemetry traces, service topology, and source.
-2. Maps latency, errors, and dependencies back to **code**.
-3. Computes an interpretable **impact radius** — services, endpoints, runtime paths, tests, SLOs.
-4. Applies a **focused patch**.
-5. Builds an **experiment DAG**: baseline vs patch, under normal load, concurrency, and faults.
-6. Executes those experiments in isolated environments.
-7. Emits a **validation report** grounded in executed evidence.
-
-If a required experiment failed, timed out, or never ran, Aquila does not mark the patch validated.
-
-## Why this exists
-
-Current coding agents primarily understand:
-
-- code
-- repository structure
-- documentation
-- tests
-- terminal output
-
-Aquila additionally understands:
-
-- runtime traces
-- service topology
-- request paths
-- latency distributions
-- error behavior
-- database interactions
-- dependency relationships
-- deployment topology
-- resource behavior
-- historical experiments
-
-The product loop is therefore not *prompt → patch → tests → “looks good”*. It is:
-
-```
-USER REQUEST
-     │
-     ▼
-repository + running system
-     │
-     ▼
-Living Systems Graph
-     │
-     ▼
-impact analysis → patch plan → code change
-     │
-     ▼
-experiment plan
-     │
-     ▼
-distributed execution (baseline ∥ patch)
-     │
-     ▼
-evidence engine → PR report
-```
-
-## The four systems
-
-### Living Systems Graph
-
-A continuously updated model connecting source to runtime:
-
-repository → services → endpoints → functions → spans → request paths → dependencies → databases → tests → metrics → SLOs
-
-Edges carry provenance and confidence. Incomplete mappings stay incomplete. Aquila does not invent a call graph to look finished.
-
-### Impact Engine
-
-Given a Git diff, Aquila expands outward through static structure and observed runtime paths. Output is categorical and inspectable: **direct**, **likely**, **possible**, **unobserved**. Not a synthetic 94.238% risk score.
-
-### Experiment Engine
-
-Aquila generates the minimum useful experiment set that could actually falsify the change: behavioral replay, performance comparison, fault injection, concurrency, and impacted tests. Workloads are derived from sanitized trace templates and explicit fixtures — not raw production bodies.
-
-### Distributed Execution Fabric
-
-Experiments run as persistent DAGs on Linux workers with leases, fencing tokens, content-addressed artifacts, and sandboxed execution. The control plane owns scheduling semantics. Kubernetes is a deployment target, not a substitute for the execution model.
-
-## Target domain
-
-V1 is intentionally narrow so the model can be real:
-
-| Supported now (design) | Explicitly later |
-| --- | --- |
-| Docker Compose, Kubernetes | Serverless |
-| Go and Python services | Java, Node/TypeScript |
-| HTTP / gRPC APIs | Kafka and broader queues |
-| PostgreSQL, Redis | Complex multi-cluster Kubernetes |
-| OpenTelemetry traces, Prometheus metrics | Full observability backend replacement |
-
-Aquila is not an IDE, a ChatGPT clone, a GitHub Actions replacement, a Kubernetes replacement, Datadog, Sentry, a container runtime, or a generic multi-agent framework.
-
-Center of gravity: **understand → modify → experimentally validate running software.**
-
-## Architecture
-
-```
-                    AQUILA CONTROL PLANE
-                      API / Agent
-                          │
-                    Experiment Planner
-                          │
-                       DAG Engine
-                          │
-                       Scheduler
-                          │
-                     Lease Manager
-                          │
-                      PostgreSQL
-                          │
-           ┌──────────────┼──────────────┐
-           ▼              ▼              ▼
-        worker-01      worker-02      worker-N
-           │              │              │
-        sandbox        sandbox        sandbox
-```
-
-Source of truth is split on purpose:
-
-| System | Authority |
-| --- | --- |
-| Git | source code |
-| OpenTelemetry | observed runtime |
-| PostgreSQL | Aquila coordination and derived graph |
-| Object storage | immutable artifacts |
-| LLM | reasoning assistant — never system state |
-
-## Reliability guarantees
-
-Aquila treats experiment execution as distributed systems work, not a shell script with extra steps.
-
-- At-least-once task execution with fenced result commitment. Not exactly-once.
-- A task has at most one authoritative attempt. Stale workers cannot commit.
-- Dependencies must succeed before a dependent task becomes `READY`.
-- Successful CAS objects are immutable; digest must match content.
-- Controller restart cannot destroy durable execution state.
-- Infrastructure failures and user-code failures stay distinguishable.
-- Cancellation is idempotent.
-- A patch cannot be reported validated if required experiments failed or never executed.
-
-The full set lives in [docs/INVARIANTS.md](docs/INVARIANTS.md).
-
-## Quick start
-
-Requirements: Go 1.25+, Docker, and Docker Compose.
+Go 1.25+, Docker, Compose:
 
 ```bash
-git clone https://github.com/sumedhaerram/aquila.git
-cd aquila
+git clone https://github.com/sumedh-aerram/Aquila.git
+cd Aquila
+make dev
+make ingest-smoke
+```
 
+That boots the control plane, an OpenTelemetry Collector, and `examples/shop/` — seven instrumented services with documented production-shaped defects. Smoke traffic, then list what Aquila kept:
+
+```bash
+curl -sf 'http://127.0.0.1:8080/v1/spans?limit=20'
+```
+
+You should see `gateway`, `checkout`, `payment`, shared `trace_id`s, parent links, routes, statuses, durations. No request bodies. No query strings. That JSON is observed, not generated.
+
+```bash
+make down
+```
+
+## Why you would use this
+
+Repo-only agents (and most PR bots) see files, tests, and a terminal. That is necessary. It is not enough to change `payment.authorize`.
+
+The question after a checkout patch is not “did CI go green?” It is:
+
+> Did the live path change — and can you measure it?
+
+Datadog will show you the path. It will not patch the code or run an equivalent baseline vs patch. A coding agent will patch the code. It will not replay the path. Aquila is the layer that is supposed to do both, with a hard rule: **if a required experiment did not run, the patch is not validated.**
+
+V1 is Go/Python services on Compose or Kubernetes, instrumented with OpenTelemetry. Narrow on purpose.
+
+## What's here today
+
+| | |
+| --- | --- |
+| Shop exam app | `examples/shop/` — gateway, users, checkout, inventory, payment, processor, notification. Defects D1–D6 stay; they are the ground truth, not leftovers. |
+| OTLP ingest | Collector → `POST /v1/traces` → Postgres `aquila.spans`. Allowlisted metadata only. |
+| Local debug read | `GET /v1/spans` on loopback. |
+| Control plane | `/healthz`, `/readyz`, Compose, race tests, CI. |
+
+```
+shop  --OTLP/gRPC-->  collector  --OTLP/HTTP-->  aquila-server  -->  postgres
+```
+
+This is not a telemetry backend. We do not store payloads. We keep the facts later phases need: who called whom, on which route, for how long.
+
+Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md). Ingest privacy: [docs/SECURITY.md](docs/SECURITY.md).
+
+## Where this is going
+
+The loop, in order. Nothing after ingest is claimed as working until it runs on your machine.
+
+```
+observe the running system
+        → impact of a git diff
+        → focused patch
+        → experiment DAG
+        → baseline ∥ patch
+        → evidence (or an explicit fail)
+```
+
+| | Status |
+| --- | --- |
+| Ingest live traces | **now** |
+| Service graph and runtime paths | next |
+| `aquila observe` | after the graph |
+| Impact engine | after observe |
+| Baseline/patch experiments | after impact |
+| Workers, leases, fencing | after the local loop works |
+
+`aquila ask` is the intended surface, not a shipped CLI. There are no benchmark numbers in this README because none have been measured.
+
+## Local URLs
+
+| | |
+| --- | --- |
+| Aquila | http://127.0.0.1:8080/healthz |
+| Shop gateway | http://127.0.0.1:18080/healthz |
+| Grafana | http://127.0.0.1:13000 (`admin` / `aquila`) |
+| Prometheus | http://127.0.0.1:9090 |
+| OTLP | `127.0.0.1:4317` (gRPC), `:4318` (HTTP) |
+
+Ports bind to loopback. Do not publish this stack.
+
+```bash
 make build
 make test
 make lint
-
-make dev
-```
-
-`make dev` starts PostgreSQL, the OpenTelemetry Collector, Prometheus, Grafana, the Aquila API, and the instrumented `examples/shop/` microservices.
-
-Local Grafana login is `admin` / `aquila` (anonymous viewer is also enabled).
-
-| Service | URL |
-| --- | --- |
-| Aquila API | http://localhost:8080/healthz |
-| Shop gateway | http://localhost:18080/healthz |
-| PostgreSQL (Aquila) | localhost:15432 |
-| Grafana | http://localhost:13000 |
-| Prometheus | http://localhost:9090 |
-| OTLP gRPC / HTTP | localhost:4317 / 4318 |
-
-```bash
-curl -sf http://localhost:8080/healthz
-curl -sf http://localhost:8080/readyz
-curl -sf http://localhost:18080/users/user-1
-make shop-smoke
 ./bin/aquila version
 ```
 
-Stop the stack with `make down`.
-
-## Status
-
-Control-plane health API, local Compose, and an instrumented shop demo (`examples/shop/`) are in place. Shop traces export through the collector into Aquila (`POST /v1/traces`, inspect with `GET /v1/spans`). Write ingest is token-gated in Compose. Aquila is not a telemetry backend; it keeps normalized span metadata only.
-
-## Flagship workflow
-
-This is the product surface Aquila is being built to deliver:
-
-```text
-$ aquila ask "reduce checkout p95 latency"
-
-Investigating CheckoutService
-
-Current latency     p50 91ms    p95 472ms    p99 1.31s
-Critical path       PaymentService 292ms of p95
-
-Observed            payment.authorize on 87.2% of checkout traces
-Location            services/payment/client.go:118
-Finding             HTTP client constructed on the request path
-
-AQUILA VALIDATION
-                    baseline     patch
-p95                 472ms        258ms
-error rate          .31%         .30%
-mismatches          0 / 2,814
-impacted tests      148 / 148
-
-Experiment result   PASS
-Create pull request? [Y/n]
-```
-
-Figures in that sketch are illustrative of the UX, not measured results.
-
-Shop layout and intentional defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md). Runtime privacy and sandbox defaults: [docs/SECURITY.md](docs/SECURITY.md).
-
 ## License
 
-Source in this repository is provided for the Aquila project. Licensing will be declared explicitly before a public release.
+Source in this repository is for the Aquila project. Licensing will be declared before a public release.
