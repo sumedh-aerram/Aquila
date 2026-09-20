@@ -11,7 +11,8 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/sumedhaerram/aquila/internal/version.Version=${VERSION}" -o /out/aquila-server ./cmd/server
 
 FROM alpine:3.21
-RUN adduser -D -H -u 65532 aquila
+RUN apk add --no-cache wget \
+	&& adduser -D -H -u 65532 aquila
 USER aquila
 COPY --from=build /out/aquila-server /usr/local/bin/aquila-server
 EXPOSE 8080

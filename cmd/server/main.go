@@ -9,6 +9,7 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/api"
 	"github.com/sumedhaerram/aquila/internal/config"
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/observability"
 	"github.com/sumedhaerram/aquila/internal/storage"
 )
@@ -32,7 +33,7 @@ func main() {
 	}
 	defer db.Close()
 
-	srv := api.NewServer(cfg, log, db)
+	srv := api.NewServer(cfg, log, db, ingest.NewPostgres(db.Pool()))
 	if err := srv.ListenAndServe(ctx); err != nil {
 		log.Error("server exited", "err", err)
 		os.Exit(1)

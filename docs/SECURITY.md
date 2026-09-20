@@ -20,6 +20,10 @@ Defaults:
 
 Store route templates, durations, status codes, service names, and span relationships. Richer capture is explicit opt-in.
 
+OTLP ingest (`POST /v1/traces`) persists that same allowlisted metadata in PostgreSQL. Request and response bodies are not stored even if a client sends them as span attributes. Query strings are stripped from `http.route`, `url.path` / `http.target`, and span names before persist.
+
+When `AQUILA_INGEST_TOKEN` is set, `POST /v1/traces` requires header `X-Aquila-Ingest-Token`. Local Compose uses the shared demo value `aquila-local-ingest`; do not reuse it outside loopback. An empty token keeps ingest open so unit tests and a lone binary still work.
+
 ## Agent restrictions
 
 The agent must never automatically:
@@ -43,3 +47,5 @@ Health endpoints expose liveness and PostgreSQL reachability, not secrets. Logs 
 The shop is an unauthenticated local target. `GET /users/{id}` and `GET /checkout/{id}` return data without auth by design. Host-published ports bind to loopback only. Do not expose this Compose stack on a public interface.
 
 Payment `/authorize` is idempotent on `checkout_id` so checkout's intentional retry loop (D4) cannot double-charge after a succeeded processor call.
+
+`GET /v1/spans` is unauthenticated and bound to loopback with the rest of the local API. Treat it as a local debug read, not a public query API.

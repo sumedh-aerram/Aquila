@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke
 
 help:
 	@printf '%s\n' \
@@ -35,6 +35,7 @@ help:
 		'  make migrate   Apply PostgreSQL migrations' \
 		'  make dev       Start control plane + shop demo' \
 		'  make shop-smoke  Hit gateway health, user fetch, and checkout' \
+		'  make ingest-smoke  List spans Aquila stored after shop traffic' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -57,6 +58,9 @@ lint: $(GOBIN)/golangci-lint
 
 shop-smoke:
 	bash examples/shop/scripts/traffic.sh
+
+ingest-smoke: shop-smoke
+	@curl -sf 'http://127.0.0.1:8080/v1/spans?limit=20'
 
 fmt:
 	$(GO) fmt ./...

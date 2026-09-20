@@ -11,16 +11,23 @@ processors:
 
 exporters:
   debug:
-    verbosity: normal
+    verbosity: basic
   prometheus:
     endpoint: 0.0.0.0:8889
+  otlphttp/aquila:
+    endpoint: http://api:8080
+    headers:
+      X-Aquila-Ingest-Token: aquila-local-ingest
+    tls:
+      insecure: true
+    compression: none
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/aquila]
     metrics:
       receivers: [otlp]
       processors: [batch]

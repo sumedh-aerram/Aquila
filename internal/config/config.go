@@ -18,6 +18,9 @@ const (
 	DefaultPostgresURL      = "postgres://aquila:aquila@127.0.0.1:15432/aquila?sslmode=disable"
 	DefaultPostgresMaxConns = int32(8)
 	DefaultConnectTimeout   = 5 * time.Second
+	DefaultReadTimeout      = 15 * time.Second
+	DefaultWriteTimeout     = 30 * time.Second
+	DefaultIdleTimeout      = 60 * time.Second
 )
 
 // Config is Aquila control-plane configuration.
@@ -25,16 +28,24 @@ type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Log      LogConfig      `yaml:"log"`
 	Postgres PostgresConfig `yaml:"postgres"`
+	Ingest   IngestConfig   `yaml:"ingest"`
 }
 
 type ServerConfig struct {
 	Addr            string        `yaml:"addr"`
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	ReadTimeout     time.Duration `yaml:"read_timeout"`
+	WriteTimeout    time.Duration `yaml:"write_timeout"`
+	IdleTimeout     time.Duration `yaml:"idle_timeout"`
 }
 
 type LogConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
+}
+
+type IngestConfig struct {
+	Token string `yaml:"token"`
 }
 
 type PostgresConfig struct {
@@ -72,6 +83,9 @@ func defaults() Config {
 		Server: ServerConfig{
 			Addr:            DefaultServerAddr,
 			ShutdownTimeout: DefaultShutdownTimeout,
+			ReadTimeout:     DefaultReadTimeout,
+			WriteTimeout:    DefaultWriteTimeout,
+			IdleTimeout:     DefaultIdleTimeout,
 		},
 		Log: LogConfig{
 			Level:  DefaultLogLevel,
@@ -113,6 +127,9 @@ func applyEnv(cfg *Config) {
 			cfg.Postgres.ConnectTimeout = d
 		}
 	}
+	if v := os.Getenv("AQUILA_INGEST_TOKEN"); v != "" {
+		cfg.Ingest.Token = v
+	}
 }
 
 // Validate checks required fields and enumerations.
@@ -122,6 +139,15 @@ func (c Config) Validate() error {
 	}
 	if c.Server.ShutdownTimeout <= 0 {
 		return fmt.Errorf("server.shutdown_timeout must be positive")
+	}
+	if c.Server.ReadTimeout <= 0 {
+		return fmt.Errorf("server.read_timeout must be positive")
+	}
+	if c.Server.WriteTimeout <= 0 {
+		return fmt.Errorf("server.write_timeout must be positive")
+	}
+	if c.Server.IdleTimeout <= 0 {
+		return fmt.Errorf("server.idle_timeout must be positive")
 	}
 	switch strings.ToLower(c.Log.Level) {
 	case "debug", "info", "warn", "error":

@@ -197,7 +197,7 @@ Stop the stack with `make down`.
 
 ## Status
 
-Control-plane health API, local Compose, and an instrumented shop demo (`examples/shop/`) are in place. Shop traces export to the collector; Aquila does not ingest them yet.
+Control-plane health API, local Compose, and an instrumented shop demo (`examples/shop/`) are in place. Shop traces export through the collector into Aquila (`POST /v1/traces`, inspect with `GET /v1/spans`). Write ingest is token-gated in Compose. Aquila is not a telemetry backend; it keeps normalized span metadata only.
 
 ## Flagship workflow
 

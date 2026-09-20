@@ -43,6 +43,9 @@ services:
       - "127.0.0.1:4317:4317" # OTLP gRPC
       - "127.0.0.1:4318:4318" # OTLP HTTP
       - "127.0.0.1:8889:8889" # Prometheus exporter
+    depends_on:
+      api:
+        condition: service_healthy
     networks:
       - aquila
 
@@ -90,6 +93,7 @@ services:
       AQUILA_LOG_LEVEL: info
       AQUILA_LOG_FORMAT: json
       AQUILA_SERVER_ADDR: ":8080"
+      AQUILA_INGEST_TOKEN: aquila-local-ingest
     volumes:
       - ../../configs/server.yaml:/etc/aquila/server.yaml:ro
     user: "65532:65532"
@@ -99,6 +103,12 @@ services:
       - no-new-privileges:true
     ports:
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy

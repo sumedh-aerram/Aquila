@@ -17,6 +17,7 @@ func clearConfigEnv(t *testing.T) {
 		"AQUILA_POSTGRES_URL",
 		"AQUILA_POSTGRES_MAX_CONNS",
 		"AQUILA_POSTGRES_CONNECT_TIMEOUT",
+		"AQUILA_INGEST_TOKEN",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
@@ -75,6 +76,21 @@ postgres:
 	}
 	if cfg.Postgres.MaxConns != 4 {
 		t.Fatalf("max_conns = %d", cfg.Postgres.MaxConns)
+	}
+	if cfg.Server.ReadTimeout != DefaultReadTimeout {
+		t.Fatalf("read_timeout = %s", cfg.Server.ReadTimeout)
+	}
+}
+
+func TestLoadIngestTokenFromEnv(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("AQUILA_INGEST_TOKEN", "local-demo")
+	cfg, err := LoadFrom("")
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Ingest.Token != "local-demo" {
+		t.Fatalf("token = %q", cfg.Ingest.Token)
 	}
 }
 

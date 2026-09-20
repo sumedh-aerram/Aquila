@@ -44,6 +44,14 @@ func (db *DB) Ready(ctx context.Context) error {
 	return db.pool.Ping(ctx)
 }
 
+// Pool returns the underlying connection pool.
+func (db *DB) Pool() *pgxpool.Pool {
+	if db == nil {
+		return nil
+	}
+	return db.pool
+}
+
 // Close releases the pool.
 func (db *DB) Close() {
 	if db != nil && db.pool != nil {

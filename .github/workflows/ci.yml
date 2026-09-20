@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -13,6 +17,22 @@ jobs:
     name: build-test-lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aquila
+          POSTGRES_PASSWORD: aquila
+          POSTGRES_DB: aquila
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aquila -d aquila"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AQUILA_TEST_POSTGRES_URL: postgres://aquila:aquila@127.0.0.1:5432/aquila?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +46,11 @@ jobs:
 
       - name: Lint
         run: make lint
+
+      - name: Migrate
+        run: |
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
+          migrate -path migrations -database "$AQUILA_TEST_POSTGRES_URL" up
 
       - name: Test
         run: make test

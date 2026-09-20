@@ -22,7 +22,7 @@ func (s stubReady) Ready(_ context.Context) error {
 
 func TestHealthzOK(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{})
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
@@ -40,7 +40,7 @@ func TestHealthzOK(t *testing.T) {
 
 func TestReadyzUnavailable(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{err: io.EOF})
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{err: io.EOF}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
@@ -51,7 +51,7 @@ func TestReadyzUnavailable(t *testing.T) {
 
 func TestReadyzOK(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{})
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, req)
