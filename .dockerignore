@@ -6,7 +6,6 @@ out
 *.md
 docs
 web
-examples
 benchmarks
 chaos
 deploy/terraform

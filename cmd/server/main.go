@@ -11,6 +11,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/observability"
+	"github.com/sumedhaerram/aquila/internal/source"
 	"github.com/sumedhaerram/aquila/internal/storage"
 )
 
@@ -33,7 +34,20 @@ func main() {
 	}
 	defer db.Close()
 
-	srv := api.NewServer(cfg, log, db, ingest.NewPostgres(db.Pool()))
+	src, err := source.Open(ctx, cfg.Source)
+	if err != nil {
+		log.Error("open source graph", "err", err)
+		os.Exit(1)
+	}
+	if src != nil {
+		log.Info("source graph loaded", "module", src.Module(), "nodes", src.NodeCount())
+	}
+
+	srv := api.NewServer(cfg, log, api.Dependencies{
+		Ready:  db,
+		Spans:  ingest.NewPostgres(db.Pool()),
+		Source: src,
+	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		log.Error("server exited", "err", err)
 		os.Exit(1)

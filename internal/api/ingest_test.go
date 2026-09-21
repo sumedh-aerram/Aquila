@@ -22,7 +22,7 @@ import (
 func TestOTLPTracesPersistsNormalizedSpan(t *testing.T) {
 	t.Parallel()
 	store := ingest.NewMemory()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, store)
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
 
 	req := &coltracepb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{{
@@ -82,7 +82,7 @@ func TestOTLPTracesPersistsNormalizedSpan(t *testing.T) {
 
 func TestOTLPTracesUnavailableWithoutStore(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, nil)
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}})
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte{1})))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -96,7 +96,7 @@ func TestOTLPTracesRequiresTokenWhenConfigured(t *testing.T) {
 	srv := NewServer(config.Config{
 		Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second},
 		Ingest: config.IngestConfig{Token: "correct-token"},
-	}, nil, stubReady{}, store)
+	}, nil, Dependencies{Ready: stubReady{}, Spans: store})
 
 	raw := marshalMinimalOTLP(t)
 	post := func(token string) *httptest.ResponseRecorder {
@@ -129,7 +129,7 @@ func TestOTLPTracesRequiresTokenWhenConfigured(t *testing.T) {
 
 func TestOTLPTracesRejectsOversizedBody(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, ingest.NewMemory())
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: ingest.NewMemory()})
 	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(bytes.Repeat([]byte{'x'}, otlpMaxBytes+1)))
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 	rec := httptest.NewRecorder()
@@ -141,7 +141,7 @@ func TestOTLPTracesRejectsOversizedBody(t *testing.T) {
 
 func TestListSpansClipsQueryParams(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, ingest.NewMemory())
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: ingest.NewMemory()})
 	long := strings.Repeat("a", 4096)
 	req := httptest.NewRequest(http.MethodGet, "/v1/spans?service="+long+"&trace_id="+long, nil)
 	rec := httptest.NewRecorder()

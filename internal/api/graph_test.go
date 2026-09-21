@@ -25,7 +25,7 @@ func TestGraphDerivedFromStoredSpans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, store)
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/graph", nil))
 	if rec.Code != http.StatusOK {
@@ -45,7 +45,7 @@ func TestGraphDerivedFromStoredSpans(t *testing.T) {
 
 func TestGraphUnavailableWithoutStore(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, nil)
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}})
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/graph", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -55,7 +55,7 @@ func TestGraphUnavailableWithoutStore(t *testing.T) {
 
 func TestGraphRejectsInvalidTracesParam(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, stubReady{}, ingest.NewMemory())
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: ingest.NewMemory()})
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/graph?traces=nope", nil))
 	if rec.Code != http.StatusBadRequest {

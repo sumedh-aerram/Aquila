@@ -94,6 +94,7 @@ services:
       AQUILA_LOG_FORMAT: json
       AQUILA_SERVER_ADDR: ":8080"
       AQUILA_INGEST_TOKEN: aquila-local-ingest
+      AQUILA_SOURCE_SNAPSHOT: /etc/aquila/source.json
     volumes:
       - ../../configs/server.yaml:/etc/aquila/server.yaml:ro
     user: "65532:65532"

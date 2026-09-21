@@ -8,8 +8,16 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/ingest"
+	"github.com/sumedhaerram/aquila/internal/source"
 	"github.com/sumedhaerram/aquila/internal/version"
 )
+
+// Dependencies are optional control-plane backends. A nil field disables that surface.
+type Dependencies struct {
+	Ready  ReadyChecker
+	Spans  ingest.Store
+	Source *source.Graph
+}
 
 // Server is the control-plane HTTP surface.
 type Server struct {
@@ -17,15 +25,16 @@ type Server struct {
 	log   *slog.Logger
 	ready ReadyChecker
 	spans ingest.Store
+	src   *source.Graph
 	http  *http.Server
 }
 
-// NewServer constructs the HTTP API. spans may be nil to disable ingest.
-func NewServer(cfg config.Config, log *slog.Logger, ready ReadyChecker, spans ingest.Store) *Server {
+// NewServer constructs the HTTP API.
+func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{cfg: cfg, log: log, ready: ready, spans: spans}
+	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
@@ -33,6 +42,9 @@ func NewServer(cfg config.Config, log *slog.Logger, ready ReadyChecker, spans in
 	mux.HandleFunc("POST /v1/traces", s.handleOTLPTraces)
 	mux.HandleFunc("GET /v1/spans", s.handleListSpans)
 	mux.HandleFunc("GET /v1/graph", s.handleGraph)
+	mux.HandleFunc("GET /v1/source", s.handleSource)
+	mux.HandleFunc("GET /v1/source/neighbors", s.handleSourceNeighbors)
+	mux.HandleFunc("GET /v1/locate", s.handleLocate)
 
 	readTimeout := cfg.Server.ReadTimeout
 	if readTimeout <= 0 {

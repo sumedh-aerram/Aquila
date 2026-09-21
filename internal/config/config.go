@@ -29,6 +29,7 @@ type Config struct {
 	Log      LogConfig      `yaml:"log"`
 	Postgres PostgresConfig `yaml:"postgres"`
 	Ingest   IngestConfig   `yaml:"ingest"`
+	Source   SourceConfig   `yaml:"source"`
 }
 
 type ServerConfig struct {
@@ -46,6 +47,13 @@ type LogConfig struct {
 
 type IngestConfig struct {
 	Token string `yaml:"token"`
+}
+
+// SourceConfig locates the Go module to index. Dir is a live go/packages load;
+// Snapshot is a JSON file produced by cmd/sourceindex for images without a Go toolchain.
+type SourceConfig struct {
+	Dir      string `yaml:"dir"`
+	Snapshot string `yaml:"snapshot"`
 }
 
 type PostgresConfig struct {
@@ -129,6 +137,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AQUILA_INGEST_TOKEN"); v != "" {
 		cfg.Ingest.Token = v
+	}
+	if v := os.Getenv("AQUILA_SOURCE_DIR"); v != "" {
+		cfg.Source.Dir = v
+	}
+	if v := os.Getenv("AQUILA_SOURCE_SNAPSHOT"); v != "" {
+		cfg.Source.Snapshot = v
 	}
 }
 

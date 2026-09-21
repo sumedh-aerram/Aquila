@@ -18,6 +18,8 @@ func clearConfigEnv(t *testing.T) {
 		"AQUILA_POSTGRES_MAX_CONNS",
 		"AQUILA_POSTGRES_CONNECT_TIMEOUT",
 		"AQUILA_INGEST_TOKEN",
+		"AQUILA_SOURCE_DIR",
+		"AQUILA_SOURCE_SNAPSHOT",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
@@ -91,6 +93,22 @@ func TestLoadIngestTokenFromEnv(t *testing.T) {
 	}
 	if cfg.Ingest.Token != "local-demo" {
 		t.Fatalf("token = %q", cfg.Ingest.Token)
+	}
+}
+
+func TestLoadSourceFromEnv(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("AQUILA_SOURCE_DIR", "examples/shop")
+	t.Setenv("AQUILA_SOURCE_SNAPSHOT", "/etc/aquila/source.json")
+	cfg, err := LoadFrom("")
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Source.Dir != "examples/shop" {
+		t.Fatalf("dir = %q", cfg.Source.Dir)
+	}
+	if cfg.Source.Snapshot != "/etc/aquila/source.json" {
+		t.Fatalf("snapshot = %q", cfg.Source.Snapshot)
 	}
 }
 

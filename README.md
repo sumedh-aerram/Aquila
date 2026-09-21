@@ -31,7 +31,7 @@ V1 targets containerized Go and Python services on Docker Compose or Kubernetes,
 ## What it does
 
 1. **Observe** — accept OTLP, persist service, route, parent, duration, status. No request bodies. No query strings.
-2. **Locate** — attach observed paths to functions and files where the instrumentation (or later static analysis) supports it.
+2. **Locate** — parse target source into a traversable graph, then attach observed spans to functions only when instrumentation attributes uniquely match. Unmapped spans stay unmapped.
 3. **Impact** — given a diff, name affected services, endpoints, runtime paths, and tests. Direct, likely, possible, unobserved — not a synthetic score.
 4. **Change** — a focused patch on that radius.
 5. **Experiment** — the smallest DAG that could falsify the change: trace-derived replay, performance, faults, concurrency, impacted tests.
@@ -67,10 +67,12 @@ curl -sf http://127.0.0.1:8080/healthz
 curl -sf http://127.0.0.1:18080/users/user-1
 curl -sf 'http://127.0.0.1:8080/v1/spans?limit=20'
 curl -sf 'http://127.0.0.1:8080/v1/graph?traces=20'
+curl -sf 'http://127.0.0.1:8080/v1/source'
+curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
 make down
 ```
 
-`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
+`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
 
 ## How it is put together
 
@@ -96,7 +98,7 @@ make down
                       evidence
 ```
 
-Shop services export OTLP/gRPC to the collector. The collector forwards OTLP/HTTP to Aquila so checkout never waits on the control plane. Runtime topology is computed from a window of complete traces, in process.
+Shop services export OTLP/gRPC to the collector. The collector forwards OTLP/HTTP to Aquila so checkout never waits on the control plane. Runtime topology is computed from a window of complete traces, in process. The source graph is loaded from a live module directory (`AQUILA_SOURCE_DIR`) or from a JSON snapshot (`AQUILA_SOURCE_SNAPSHOT`) so the API image does not ship a Go toolchain.
 
 Experiments are **jobs**: identity, baseline SHA, patch SHA, workload digest, attempt, lease, result. Workers heartbeat; expired work is retaken; a stale attempt cannot commit. Kubernetes may host those workers. It does not replace the scheduler, the lease, or content-addressed artifacts.
 

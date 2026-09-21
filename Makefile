@@ -20,13 +20,13 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke
 
 help:
 	@printf '%s\n' \
 		'Aquila developer targets' \
 		'' \
-		'  make build     Build aquila and aquila-server into ./bin' \
+		'  make build     Build aquila, aquila-server, and sourceindex into ./bin' \
 		'  make test      go test -race ./... including examples/shop' \
 		'  make shop-test race tests for the demo shop module' \
 		'  make lint      golangci-lint (control plane + shop)' \
@@ -37,6 +37,9 @@ help:
 		'  make shop-smoke  Hit gateway health, user fetch, and checkout' \
 		'  make ingest-smoke  List spans Aquila stored after shop traffic' \
 		'  make graph-smoke  Derive services, edges, and paths from stored spans' \
+		'  make source-index  Parse examples/shop into out/source.json' \
+		'  make source-smoke  Print the loaded shop source graph' \
+		'  make locate-smoke  Bind recent spans to source functions' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -45,8 +48,10 @@ build:
 	@mkdir -p '$(GOBIN)'
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o '$(GOBIN)/aquila' ./cmd/aquila
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o '$(GOBIN)/aquila-server' ./cmd/server
+	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o '$(GOBIN)/sourceindex' ./cmd/sourceindex
 
 test:
+	$(GO) -C examples/shop mod download
 	$(GO) test -race -count=1 ./...
 	$(MAKE) shop-test
 
@@ -65,6 +70,16 @@ ingest-smoke: shop-smoke
 
 graph-smoke: ingest-smoke
 	@curl -sf 'http://127.0.0.1:8080/v1/graph?traces=20'
+
+source-index:
+	@mkdir -p out
+	$(GO) run ./cmd/sourceindex -dir examples/shop -out out/source.json
+
+source-smoke:
+	@curl -sf 'http://127.0.0.1:8080/v1/source'
+
+locate-smoke: ingest-smoke
+	@curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
 
 fmt:
 	$(GO) fmt ./...
