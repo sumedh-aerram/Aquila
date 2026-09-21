@@ -1,18 +1,25 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
 
 func TestRunVersion(t *testing.T) {
-	if err := run([]string{"version"}); err != nil {
+	t.Parallel()
+	var out strings.Builder
+	if err := run([]string{"version"}, &out, &out); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "aquila ") {
+		t.Fatalf("%q", out.String())
 	}
 }
 
 func TestRunUnknownCommand(t *testing.T) {
-	err := run([]string{"ask"})
+	t.Parallel()
+	err := run([]string{"ask"}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -22,13 +29,19 @@ func TestRunUnknownCommand(t *testing.T) {
 }
 
 func TestRunHelp(t *testing.T) {
-	if err := run([]string{"help"}); err != nil {
+	t.Parallel()
+	var out strings.Builder
+	if err := run([]string{"help"}, &out, &out); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "observe") || !strings.Contains(out.String(), "status") {
+		t.Fatalf("%q", out.String())
 	}
 }
 
 func TestRunNoArgs(t *testing.T) {
-	if err := run(nil); err != nil {
+	t.Parallel()
+	if err := run(nil, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke
 
 help:
 	@printf '%s\n' \
@@ -40,6 +40,7 @@ help:
 		'  make source-index  Parse examples/shop into out/source.json' \
 		'  make source-smoke  Print the loaded shop source graph' \
 		'  make locate-smoke  Bind recent spans to source functions' \
+		'  make cli-smoke   aquila status and observe against local API' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -80,6 +81,10 @@ source-smoke:
 
 locate-smoke: ingest-smoke
 	@curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
+
+cli-smoke: ingest-smoke
+	$(GO) run ./cmd/aquila status -api http://127.0.0.1:8080
+	$(GO) run ./cmd/aquila observe -api http://127.0.0.1:8080 -traces 20
 
 fmt:
 	$(GO) fmt ./...

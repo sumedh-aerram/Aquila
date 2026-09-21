@@ -48,4 +48,4 @@ The shop is an unauthenticated local target. `GET /users/{id}` and `GET /checkou
 
 Payment `/authorize` is idempotent on `checkout_id` so checkout's intentional retry loop (D4) cannot double-charge after a succeeded processor call.
 
-`GET /v1/spans`, `GET /v1/graph`, `GET /v1/source`, `GET /v1/source/neighbors`, and `GET /v1/locate` are unauthenticated and bound to loopback with the rest of the local API. Treat them as local debug reads, not public query APIs. Source responses are names, paths, and line numbers — not file bodies. Locate does not treat a span name or HTTP route as a function match.
+`GET /v1/spans`, `GET /v1/graph`, `GET /v1/source`, `GET /v1/source/neighbors`, and `GET /v1/locate` are unauthenticated and bound to loopback with the rest of the local API. Treat them as local debug reads, not public query APIs. Source responses are names, paths, and line numbers — not file bodies. The `aquila` CLI (`status`, `observe`) is a loopback HTTP client of those same endpoints. It does not execute shop code or print file bodies.
