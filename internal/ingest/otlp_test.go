@@ -168,6 +168,32 @@ func TestMemoryUpsertIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMemoryListTraceWindowKeepsCompleteTraces(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	older := time.Unix(1, 0).UTC()
+	newer := time.Unix(2, 0).UTC()
+	if err := m.UpsertSpans(t.Context(), []Span{
+		{TraceID: "old", SpanID: "1", ServiceName: "a", StartTime: older},
+		{TraceID: "new", SpanID: "2", ServiceName: "b", StartTime: newer},
+		{TraceID: "new", SpanID: "3", ParentSpanID: "2", ServiceName: "c", StartTime: newer.Add(time.Millisecond)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.ListTraceWindow(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len=%d", len(got))
+	}
+	for _, s := range got {
+		if s.TraceID != "new" {
+			t.Fatalf("%+v", got)
+		}
+	}
+}
+
 func strKV(k, v string) *commonpb.KeyValue {
 	return &commonpb.KeyValue{Key: k, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}}
 }

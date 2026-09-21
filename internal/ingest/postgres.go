@@ -110,4 +110,46 @@ func (p *Postgres) ListSpans(ctx context.Context, q ListQuery) ([]Span, error) {
 	return out, rows.Err()
 }
 
+const traceWindowSQL = `
+WITH recent AS (
+    SELECT trace_id
+      FROM aquila.spans
+     GROUP BY trace_id
+     ORDER BY MAX(start_time) DESC
+     LIMIT $1
+)
+SELECT s.trace_id, s.span_id, s.parent_span_id, s.service_name, s.span_name, s.span_kind,
+       s.status_code, s.http_method, s.http_route, COALESCE(s.http_status, 0),
+       s.code_function, s.code_file, s.start_time, s.duration_ns
+  FROM aquila.spans s
+  JOIN recent r ON r.trace_id = s.trace_id
+ ORDER BY s.start_time ASC, s.span_id ASC
+ LIMIT $2
+`
+
+// ListTraceWindow implements Store.
+func (p *Postgres) ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, error) {
+	if p == nil || p.pool == nil {
+		return nil, fmt.Errorf("postgres ingest is not configured")
+	}
+	rows, err := p.pool.Query(ctx, traceWindowSQL, normalizeTraceWindow(maxTraces), maxWindowSpans)
+	if err != nil {
+		return nil, fmt.Errorf("list trace window: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Span, 0)
+	for rows.Next() {
+		var s Span
+		if err := rows.Scan(
+			&s.TraceID, &s.SpanID, &s.ParentSpanID, &s.ServiceName, &s.Name, &s.Kind,
+			&s.StatusCode, &s.HTTPMethod, &s.HTTPRoute, &s.HTTPStatus,
+			&s.CodeFunction, &s.CodeFile, &s.StartTime, &s.DurationNS,
+		); err != nil {
+			return nil, fmt.Errorf("scan span: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 var _ Store = (*Postgres)(nil)

@@ -72,3 +72,34 @@ func TestPostgresUpsertIsIdempotent(t *testing.T) {
 		t.Fatalf("%+v", got[0])
 	}
 }
+
+func TestPostgresListTraceWindow(t *testing.T) {
+	p := openTestPostgres(t)
+	h := sha256.Sum256([]byte(t.Name()))
+	traceID := hex.EncodeToString(h[:16])
+	parentID := hex.EncodeToString(h[:8])
+	childID := hex.EncodeToString(h[8:16])
+	t.Cleanup(func() {
+		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id = $1`, traceID)
+	})
+	start := time.Unix(10, 0).UTC()
+	if err := p.UpsertSpans(t.Context(), []Span{
+		{TraceID: traceID, SpanID: parentID, ServiceName: "checkout", StartTime: start},
+		{TraceID: traceID, SpanID: childID, ParentSpanID: parentID, ServiceName: "payment", StartTime: start.Add(time.Millisecond)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ListTraceWindow(t.Context(), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found int
+	for _, s := range got {
+		if s.TraceID == traceID {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatalf("found=%d window=%d", found, len(got))
+	}
+}

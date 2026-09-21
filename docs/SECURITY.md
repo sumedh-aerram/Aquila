@@ -48,4 +48,4 @@ The shop is an unauthenticated local target. `GET /users/{id}` and `GET /checkou
 
 Payment `/authorize` is idempotent on `checkout_id` so checkout's intentional retry loop (D4) cannot double-charge after a succeeded processor call.
 
-`GET /v1/spans` is unauthenticated and bound to loopback with the rest of the local API. Treat it as a local debug read, not a public query API.
+`GET /v1/spans` and `GET /v1/graph` are unauthenticated and bound to loopback with the rest of the local API. Treat them as local debug reads, not public query APIs.

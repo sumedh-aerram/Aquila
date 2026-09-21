@@ -32,6 +32,7 @@ func NewServer(cfg config.Config, log *slog.Logger, ready ReadyChecker, spans in
 	mux.HandleFunc("GET /version", s.handleVersion)
 	mux.HandleFunc("POST /v1/traces", s.handleOTLPTraces)
 	mux.HandleFunc("GET /v1/spans", s.handleListSpans)
+	mux.HandleFunc("GET /v1/graph", s.handleGraph)
 
 	readTimeout := cfg.Server.ReadTimeout
 	if readTimeout <= 0 {

@@ -6,11 +6,14 @@ import (
 )
 
 const (
-	maxString     = 512
-	maxOTLPBytes  = 4 << 20
-	maxSpansBatch = 10000
-	defaultList   = 50
-	maxList       = 200
+	maxString          = 512
+	maxOTLPBytes       = 4 << 20
+	maxSpansBatch      = 10000
+	defaultList        = 50
+	maxList            = 200
+	defaultTraceWindow = 50
+	maxTraceWindow     = 200
+	maxWindowSpans     = 10000
 )
 
 // Span is the metadata Aquila retains from an OTLP span.
@@ -42,6 +45,7 @@ type ListQuery struct {
 type Store interface {
 	UpsertSpans(ctx context.Context, spans []Span) error
 	ListSpans(ctx context.Context, q ListQuery) ([]Span, error)
+	ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, error)
 }
 
 func clip(s string, n int) string {
@@ -57,6 +61,16 @@ func normalizeLimit(n int) int {
 	}
 	if n > maxList {
 		return maxList
+	}
+	return n
+}
+
+func normalizeTraceWindow(n int) int {
+	if n <= 0 {
+		return defaultTraceWindow
+	}
+	if n > maxTraceWindow {
+		return maxTraceWindow
 	}
 	return n
 }

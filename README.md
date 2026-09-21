@@ -46,6 +46,7 @@ Requires Go 1.25+, Docker, and Compose. That command starts Aquila, Postgres, th
 curl -sf http://127.0.0.1:8080/healthz
 curl -sf http://127.0.0.1:18080/users/user-1
 curl -sf 'http://127.0.0.1:8080/v1/spans?limit=20'
+curl -sf 'http://127.0.0.1:8080/v1/graph?traces=20'
 make down
 ```
 

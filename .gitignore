@@ -47,7 +47,6 @@ vendor/
 /internal/cache/
 /internal/auth/
 /internal/dag/
-/internal/graph/
 /internal/scheduler/
 /internal/agent/
 /internal/lease/
