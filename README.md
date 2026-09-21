@@ -1,46 +1,66 @@
 # Aquila
 
-**Prove the patch against the running system.**
+Aquila is a **control plane for changing distributed backends safely**.
 
-CI sees tests. Agents see git. Production sees traces. Those are different worlds, and that is why a green PR still ships a slow checkout.
-
-Aquila is the control plane that joins them. It reconstructs how a distributed backend actually behaves from OpenTelemetry, maps that behavior onto source, computes the blast radius of a change, and validates the patch with baseline vs patch experiments. If a required experiment did not run, the change is not validated.
+It sits beside a running system—not inside the request path—and holds three things most tools never put in one place: **what the code is**, **how the system actually behaves**, and **whether a proposed patch changed that behavior**. The last question is answered only by executing the same production-shaped workload against **baseline and patch** in isolated environments. Confidence is not evidence. A skipped experiment is not a pass.
 
 ```
 $ aquila ask "reduce checkout p95 latency"
 ```
 
-That is the product: investigate runtime evidence, change the code, run an equivalent environment twice (baseline and patch), report what the traces did.
+Investigate from traces, map the blast radius onto source, apply a focused change, run the experiment DAG, report what the two revisions did.
 
-## Why it exists
+## Why a control plane
 
-A coding agent can rewrite `payment.authorize`, pass unit tests, and still leave the live path worse. An observability backend can show you the path and will not ship a patch. Aquila is the layer in between: **runtime truth in, evidence out.**
+A checkout request does not live in one repository file. It crosses a gateway, an orchestrator, users, inventory, payment, a processor, a notifier, Postgres, and Redis. Latency and errors hide in **how those hops compose at runtime**. Static analysis cannot see a connection opened on every authorize. A trace store cannot tell you whether tomorrow’s diff is safe. A test suite cannot replay the path production actually takes unless you derived the workload from those traces.
 
-It is for containerized Go and Python services on Docker Compose or Kubernetes, instrumented with OpenTelemetry. HTTP/gRPC, Postgres, Redis. Narrow so the model can be real.
+Aquila is the layer that **coordinates** that work:
+
+- **Ingest** runtime spans (OpenTelemetry) as durable, allowlisted facts.
+- **Derive** services, dependencies, and request paths only from observed parent links.
+- **Join** those paths to source and to a git diff (impact that a human can inspect).
+- **Plan and run** experiments as jobs: equivalent environments, two git SHAs, one workload.
+- **Commit results** under leases and fencing so a stale worker cannot write history.
+
+That is control-plane work: durable state, at-least-once ingestion, incomplete data, fail-closed decisions, untrusted generated code in sandboxes. The application under test stays the source of runtime truth. Aquila does not pretend to be that application.
+
+Git is source of truth. OpenTelemetry is runtime truth. PostgreSQL is Aquila’s coordination state. The language model may propose; it never authors system state.
+
+V1 targets containerized Go and Python services on Docker Compose or Kubernetes, HTTP/gRPC, Postgres, Redis, instrumented with OpenTelemetry. The domain is narrow so the graph can be honest.
 
 ## What it does
 
-1. **Observe** — ingest traces, rebuild services, endpoints, and the request paths that actually ran.
-2. **Locate** — attach those paths to functions and files.
-3. **Impact** — given a git diff, name the services, routes, tests, and runtime paths in the blast radius. Categorical (direct / likely / possible / unobserved), not a fake risk score.
-4. **Change** — apply a focused patch.
-5. **Experiment** — minimum useful DAG: replay, performance, faults, concurrency, impacted tests. Same workload, two revisions.
-6. **Evidence** — pass only if the required runs executed. Skip, timeout, and infra failure are not success.
+1. **Observe** — accept OTLP, persist service, route, parent, duration, status. No request bodies. No query strings.
+2. **Locate** — attach observed paths to functions and files where the instrumentation (or later static analysis) supports it.
+3. **Impact** — given a diff, name affected services, endpoints, runtime paths, and tests. Direct, likely, possible, unobserved — not a synthetic score.
+4. **Change** — a focused patch on that radius.
+5. **Experiment** — the smallest DAG that could falsify the change: trace-derived replay, performance, faults, concurrency, impacted tests.
+6. **Evidence** — a report grounded in executed jobs. Timeout, skip, and infrastructure failure are distinct from “the patch is fine.”
 
-Git is source of truth. OpenTelemetry is runtime truth. Postgres is Aquila state. The model never is.
+## The hard parts (this is the product)
 
-## Demo
+**Two truths, one decision.** Source and runtime disagree. A function can exist and never run. A span can exist and lack a parent in the batch you loaded. Aquila records provenance (`observed_parent` today) and **does not invent** edges to look complete.
 
-The in-repo application is `examples/shop/`: gateway, users, checkout, inventory, payment, processor, notification. It is instrumented, it has documented production-shaped defects, and it is the system Aquila is pointed at.
+**At-least-once, not exactly-once.** Collectors retry. Spans upsert on `(trace_id, span_id)`. Experiments retry as new attempts with fencing tokens. Duplicate delivery must not duplicate a charge in the exam app, and must not duplicate an authoritative experiment result.
+
+**Equivalence.** Baseline vs patch only means something if environments, workload, and resource bounds match and both revisions are recorded. “We ran it once in staging” is not that.
+
+**Untrusted execution.** Generated patches and experiment workloads get bounded CPU, memory, PIDs, time, filesystem, and network. No host Docker socket. No host cloud credentials. The control plane schedules; the sandbox runs user code.
+
+**Failure is data.** A worker that loses its lease does not get to land a late result. That invariant is the difference between a script and a control plane.
+
+## Reference system
+
+`examples/shop/` is the system Aquila is pointed at: seven instrumented services (gateway, users, checkout, inventory, payment, processor, notification) and documented production-shaped defects—connection churn, N+1 queries, unindexed event scans, retry amplification, synchronous notify on the critical path, a process-wide lock.
 
 ```bash
 git clone https://github.com/sumedh-aerram/Aquila.git
 cd Aquila
 make dev
-make ingest-smoke
+make graph-smoke
 ```
 
-Requires Go 1.25+, Docker, and Compose. That command starts Aquila, Postgres, the OpenTelemetry Collector, Prometheus, Grafana, and the shop.
+Requires Go 1.25+, Docker, and Compose. Starts the control plane, shop Postgres, Aquila Postgres, Redis, the OpenTelemetry Collector, Prometheus, Grafana, and the shop.
 
 ```bash
 curl -sf http://127.0.0.1:8080/healthz
@@ -50,42 +70,49 @@ curl -sf 'http://127.0.0.1:8080/v1/graph?traces=20'
 make down
 ```
 
-Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
+`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
 
-## How it works
+## How it is put together
 
 ```
-                    git                         traces (OTLP)
-                      │                               │
-                      ▼                               ▼
-                 source graph                    span store
-                      │                               │
-                      └──────────►  runtime graph  ◄──┘
-                                      │
-                         impact  →  patch  →  experiment DAG
-                                      │
-                         baseline ∥ patch   (isolated, equivalent)
-                                      │
-                                   evidence
+        git                         OTLP traces
+         │                               │
+         ▼                               ▼
+   source graph                      span store
+         │                               │
+         └────────►  runtime graph  ◄────┘
+                         │
+              impact → patch → experiment DAG
+                         │
+                      job queue
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+         worker (baseline)     worker (patch)
+              │                     │
+            sandbox               sandbox
+              └──────────┬──────────┘
+                         ▼
+                      evidence
 ```
 
-Shop services export OTLP/gRPC to the collector. The collector forwards OTLP/HTTP to Aquila. Aquila persists allowlisted span metadata (service, route, parent, duration, status). Request bodies and query strings are dropped. Collector retries upsert on `(trace_id, span_id)` — at-least-once ingest, not exactly-once.
+Shop services export OTLP/gRPC to the collector. The collector forwards OTLP/HTTP to Aquila so checkout never waits on the control plane. Runtime topology is computed from a window of complete traces, in process.
 
-Experiments run as durable tasks on Linux workers with leases and fencing: a stale attempt cannot commit. Workloads are sandboxed. Aquila does not mount the host Docker socket into generated-code containers and does not put host credentials in the experiment environment.
+Experiments are **jobs**: identity, baseline SHA, patch SHA, workload digest, attempt, lease, result. Workers heartbeat; expired work is retaken; a stale attempt cannot commit. Kubernetes may host those workers. It does not replace the scheduler, the lease, or content-addressed artifacts.
 
-Ingest privacy and execution bounds: [docs/SECURITY.md](docs/SECURITY.md).
+Ingest privacy and sandbox bounds: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Stack
 
 | | |
 | --- | --- |
 | Control plane | Go |
-| Durable state | PostgreSQL |
+| Coordination state | PostgreSQL |
 | Runtime signal | OpenTelemetry (OTLP) |
-| Local demo | Docker Compose |
-| Shop | Go microservices, Postgres, Redis |
-| Artifacts | content-addressed object storage |
-| Workers | gRPC, sandboxed OCI |
+| Reference app | `examples/shop/` |
+| Local environment | Docker Compose |
+| Experiment execution | durable DAG, queue, leased workers, sandboxed OCI |
+| Artifacts | SHA-256 content-addressed storage |
 
 ```bash
 make build
@@ -102,7 +129,7 @@ make lint
 | Prometheus | http://127.0.0.1:9090 |
 | OTLP | `:4317` gRPC, `:4318` HTTP |
 
-Published ports bind to loopback.
+Ports bind to loopback.
 
 ## License
 
