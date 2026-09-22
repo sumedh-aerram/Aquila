@@ -490,3 +490,164 @@ func (s *syncWriter) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+func TestRunPlanPrintsOperatorFaultWhenRuntime(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:   []string{"internal/payment/handler.go"},
+		Direct:  []impact.Finding{{Name: "chargeProcessor", File: "internal/payment/handler.go", Reason: "changed_lines", Provenance: "diff"}},
+		Runtime: []impact.Finding{{Path: "gateway -> payment", Reason: "observed_path", Provenance: "observed_parent"}},
+	})
+	var out strings.Builder
+	err := RunPlan(t.Context(), []string{"-api", api.URL}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "fault_status") || !strings.Contains(got, "operator") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "not validated") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "overall=pass") || strings.Contains(got, "verdict=pass") {
+		t.Fatalf("must not report pass: %s", got)
+	}
+}
+
+func TestRunPlanOmitsFaultWithoutRuntime(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"internal/payment/handler.go"},
+		Direct: []impact.Finding{{Name: "chargeProcessor", File: "internal/payment/handler.go", Reason: "changed_lines"}},
+	})
+	var out strings.Builder
+	err := RunPlan(t.Context(), []string{"-api", api.URL}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "fault_status") {
+		t.Fatalf("fault without runtime: %s", got)
+	}
+	if !strings.Contains(got, "fault omitted") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunPlanRejectsEmptyImpact(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{})
+	err := RunPlan(t.Context(), []string{"-api", api.URL}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunPlanEmptyDiff(t *testing.T) {
+	t.Parallel()
+	err := RunPlan(t.Context(), []string{"-api", "http://127.0.0.1:8080"}, strings.NewReader(""), io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunExperimentMatchIsNotPass(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:   []string{"internal/payment/handler.go"},
+		Direct:  []impact.Finding{{Name: "chargeProcessor"}},
+		Runtime: []impact.Finding{{Path: "gateway -> payment", Reason: "observed_path"}},
+	})
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(gw.Close)
+	var out strings.Builder
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1",
+	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "overall=match") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "skipped") || !strings.Contains(got, "fault_status") {
+		t.Fatalf("operator fault must be skipped: %s", got)
+	}
+	if strings.Contains(got, "overall=pass") || strings.Contains(got, "verdict=pass") {
+		t.Fatalf("must not report pass: %s", got)
+	}
+	if !strings.Contains(got, "not validated") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunExperimentDetectsJSONDifference(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"a.go"},
+		Direct: []impact.Finding{{Name: "F"}},
+	})
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(base.Close)
+	patch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok", "debug": true})
+	}))
+	t.Cleanup(patch.Close)
+	var out strings.Builder
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", base.URL, "-patch", patch.URL, "-fixture", "-n", "1",
+	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "overall=differ") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
+func TestRunExperimentIncompleteWhenPatchDown(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"a.go"},
+		Direct: []impact.Finding{{Name: "F"}},
+	})
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(base.Close)
+	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	down.Close()
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1",
+	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("down patch must be incomplete, err=%v", err)
+	}
+}
+
+func TestRunExperimentRequiresTargets(t *testing.T) {
+	t.Parallel()
+	err := RunExperiment(t.Context(), []string{"-fixture"}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/impact" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, rep)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}

@@ -36,17 +36,11 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 	if *fixture {
 		w = replay.ShopFixture()
 	} else {
-		c, err := newClient(*api)
+		var err error
+		w, err = loadWorkload(ctx, *api, *limit)
 		if err != nil {
 			return err
 		}
-		var payload struct {
-			Spans []ingest.Span `json:"spans"`
-		}
-		if err := c.getJSON(ctx, "/v1/spans?limit="+strconv.Itoa(clipList(*limit)), &payload); err != nil {
-			return err
-		}
-		w = replay.FromSpans(payload.Spans)
 	}
 	if len(w.Steps) == 0 {
 		return fmt.Errorf("cli: replay: empty workload (no gateway routes in spans; try -fixture)")
@@ -142,4 +136,18 @@ func clipList(n int) int {
 		return 200
 	}
 	return n
+}
+
+func loadWorkload(ctx context.Context, api string, limit int) (replay.Workload, error) {
+	c, err := newClient(api)
+	if err != nil {
+		return replay.Workload{}, err
+	}
+	var payload struct {
+		Spans []ingest.Span `json:"spans"`
+	}
+	if err := c.getJSON(ctx, "/v1/spans?limit="+strconv.Itoa(clipList(limit)), &payload); err != nil {
+		return replay.Workload{}, err
+	}
+	return replay.FromSpans(payload.Spans), nil
 }

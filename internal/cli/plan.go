@@ -1,0 +1,159 @@
+package cli
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"strconv"
+
+	"github.com/sumedhaerram/aquila/internal/plan"
+	"github.com/sumedhaerram/aquila/internal/replay"
+)
+
+// RunPlan prints the minimum useful experiment DAG for a unified diff.
+func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	api := fs.String("api", envAPI(), "control-plane base URL")
+	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
+	file := fs.String("f", "", "diff file (default stdin)")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("cli: plan: %w", err)
+	}
+	path, err := diffPath(*file, fs.Args())
+	if err != nil {
+		return fmt.Errorf("cli: plan: %w", err)
+	}
+	raw, err := slurpDiff(stdin, path)
+	if err != nil {
+		return fmt.Errorf("cli: plan: %w", err)
+	}
+	rep, err := fetchImpact(ctx, *api, *traces, raw)
+	if err != nil {
+		return err
+	}
+	dag, err := plan.FromImpact(rep)
+	if err != nil {
+		return err
+	}
+	writePlan(stdout, dag)
+	return nil
+}
+
+func writePlan(w io.Writer, dag plan.DAG) {
+	execN, opN := 0, 0
+	for _, s := range dag.Steps {
+		if s.Operator {
+			opN++
+		} else {
+			execN++
+		}
+	}
+	writef(w, "plan     steps=%d  execute=%d  operator=%d\n", len(dag.Steps), execN, opN)
+	for _, s := range dag.Steps {
+		role := "execute"
+		if s.Operator {
+			role = "operator"
+		}
+		extra := ""
+		switch {
+		case s.Kind == plan.KindLatency:
+			extra = "  n=" + strconv.Itoa(s.N)
+		case s.Kind == plan.KindFaultStatus && s.Status > 0:
+			extra = "  status=" + strconv.Itoa(s.Status)
+		}
+		writef(w, "  %-14s %s%s  %s\n", s.Kind, role, extra, s.Reason)
+	}
+	for _, n := range dag.Notes {
+		writef(w, "note     %s\n", n)
+	}
+	writef(w, "not validated. this is a plan, not evidence.\n")
+}
+
+// RunExperiment plans from a diff and executes replay/latency against two gateways.
+func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := flag.NewFlagSet("experiment", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	api := fs.String("api", envAPI(), "control-plane base URL")
+	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
+	file := fs.String("f", "", "diff file (default stdin)")
+	base := fs.String("base", "", "baseline gateway URL")
+	patch := fs.String("patch", "", "patch gateway URL")
+	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
+	limit := fs.Int("limit", 200, "span list limit when not using -fixture")
+	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("cli: experiment: %w", err)
+	}
+	if *base == "" || *patch == "" {
+		return fmt.Errorf("cli: experiment: -base and -patch are required")
+	}
+	path, err := diffPath(*file, fs.Args())
+	if err != nil {
+		return fmt.Errorf("cli: experiment: %w", err)
+	}
+	raw, err := slurpDiff(stdin, path)
+	if err != nil {
+		return fmt.Errorf("cli: experiment: %w", err)
+	}
+	rep, err := fetchImpact(ctx, *api, *traces, raw)
+	if err != nil {
+		return err
+	}
+	dag, err := plan.FromImpact(rep)
+	if err != nil {
+		return err
+	}
+	if *n > 0 {
+		dag = plan.WithLatencyN(dag, *n)
+	}
+
+	var w replay.Workload
+	if *fixture {
+		w = replay.ShopFixture()
+	} else {
+		w, err = loadWorkload(ctx, *api, *limit)
+		if err != nil {
+			return err
+		}
+	}
+	if len(w.Steps) == 0 {
+		return fmt.Errorf("cli: experiment: empty workload (no gateway routes in spans; try -fixture)")
+	}
+
+	ev, err := plan.Execute(ctx, dag, *base, *patch, w)
+	if err != nil {
+		return err
+	}
+	writeEvidence(stdout, ev)
+	if ev.Overall == replay.VerdictIncomplete {
+		return fmt.Errorf("cli: experiment: incomplete")
+	}
+	return nil
+}
+
+func writeEvidence(w io.Writer, ev plan.Evidence) {
+	skipped := 0
+	for _, s := range ev.Steps {
+		if s.Verdict == plan.VerdictSkipped {
+			skipped++
+		}
+	}
+	writef(w, "experiment  overall=%s  steps=%d  skipped=%d\n", ev.Overall, len(ev.Steps), skipped)
+	for _, s := range ev.Steps {
+		writef(w, "  %-14s %s\n", s.Kind, s.Verdict)
+		if s.Kind == plan.KindLatency {
+			for _, lat := range s.Latency {
+				writef(w, "    latency    %s\n", formatLatency(lat))
+			}
+		}
+		if len(s.Notes) > 0 && s.Verdict != plan.VerdictSkipped {
+			writef(w, "    notes      %s\n", joinNotes(s.Notes))
+		}
+	}
+	for _, n := range ev.Notes {
+		writef(w, "note         %s\n", n)
+	}
+	writef(w, "not validated. match is not a pass. skipped operator steps are not a pass.\n")
+}

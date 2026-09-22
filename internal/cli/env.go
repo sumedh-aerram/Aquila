@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sumedhaerram/aquila/internal/diff"
 	"github.com/sumedhaerram/aquila/internal/pair"
 )
 
@@ -24,28 +23,14 @@ func RunEnv(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: env: %w", err)
 	}
-	path := *file
-	if path == "" && fs.NArg() == 1 {
-		path = fs.Arg(0)
-	} else if fs.NArg() != 0 {
-		return fmt.Errorf("cli: env: unexpected argument %q", fs.Arg(0))
-	}
-
-	var raw []byte
-	var err error
-	if path != "" {
-		raw, err = os.ReadFile(path)
-	} else {
-		raw, err = io.ReadAll(io.LimitReader(stdin, int64(diff.MaxBytes)+1))
-	}
+	path, err := diffPath(*file, fs.Args())
 	if err != nil {
 		return fmt.Errorf("cli: env: %w", err)
 	}
-	if len(raw) == 0 {
-		return fmt.Errorf("cli: env: empty diff")
-	}
-	if len(raw) > diff.MaxBytes {
-		return fmt.Errorf("cli: env: diff too large")
+
+	raw, err := slurpDiff(stdin, path)
+	if err != nil {
+		return fmt.Errorf("cli: env: %w", err)
 	}
 
 	env, err := pair.Prepare(ctx, pair.PrepareOpts{

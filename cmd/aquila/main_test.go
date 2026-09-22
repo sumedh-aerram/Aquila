@@ -35,8 +35,14 @@ func TestRunHelp(t *testing.T) {
 	if err := run([]string{"help"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "observe") || !strings.Contains(out.String(), "impact") || !strings.Contains(out.String(), "env") || !strings.Contains(out.String(), "replay") || !strings.Contains(out.String(), "fault") {
-		t.Fatalf("%q", out.String())
+	got := out.String()
+	for _, want := range []string{"observe", "impact", "env", "replay", "fault", "plan", "experiment"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "aquila ask") {
+		t.Fatal("must not list ask as a working command")
 	}
 }
 
@@ -64,5 +70,15 @@ func TestCommandTimeoutReplayScalesWithN(t *testing.T) {
 	}
 	if got := commandTimeout([]string{"replay", "-n=100"}); got != 8*time.Minute {
 		t.Fatalf("n=100 must cap, got %s", got)
+	}
+}
+
+func TestCommandTimeoutExperimentUsesPlanDefaultN(t *testing.T) {
+	t.Parallel()
+	if got := commandTimeout([]string{"experiment"}); got != 8*time.Minute {
+		t.Fatalf("default n=20 must cap, got %s", got)
+	}
+	if got := commandTimeout([]string{"experiment", "-n", "2"}); got != 90*time.Second {
+		t.Fatalf("n=2 timeout=%s", got)
 	}
 }

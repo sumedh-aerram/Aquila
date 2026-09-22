@@ -50,6 +50,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunReplay(ctx, args[1:], stdout)
 	case "fault":
 		return cli.RunFault(ctx, args[1:], stdout)
+	case "plan":
+		return cli.RunPlan(ctx, args[1:], os.Stdin, stdout)
+	case "experiment":
+		return cli.RunExperiment(ctx, args[1:], os.Stdin, stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -66,25 +70,27 @@ Usage:
   aquila <command> [flags]
 
 Commands:
-  status     Control-plane health, ready, version
-  observe    Runtime hops, source summary, span-to-source binds
-  impact     Blast radius of a unified diff (direct, likely, runtime, unobserved)
-  env        Isolated baseline and patch shop trees from a diff (does not start)
-  replay     Same workload against two gateways; match/differ/incomplete
-  fault      Loopback reverse proxy that delays or injects a status
-  version    Print the Aquila version
-  help       Show this help
+  status      Control-plane health, ready, version
+  observe     Runtime hops, source summary, span-to-source binds
+  impact      Blast radius of a unified diff (direct, likely, runtime, unobserved)
+  env         Isolated baseline and patch shop trees from a diff (does not start)
+  replay      Same workload against two gateways; match/differ/incomplete
+  fault       Loopback reverse proxy that delays or injects a status
+  plan        Minimum useful experiment DAG from impact (does not run it)
+  experiment  Plan plus executed replay/latency against two gateways
+  version     Print the Aquila version
+  help        Show this help
 
 Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
-  -traces int     observe/impact trace window (default 20, max 200)
-  -f path         impact/env: diff file (default stdin)
+  -traces int     observe/impact/plan/experiment trace window (default 20, max 200)
+  -f path         impact/env/plan/experiment: diff file (default stdin)
   -shop path      env: shop module (default examples/shop)
   -out path       env: pair parent directory (default out/env)
-  -base url       replay: baseline gateway
-  -patch url      replay: patch gateway
-  -fixture        replay: shop smoke requests (not span-derived)
-  -n int          replay: repeats for latency samples (default 1, max 100)
+  -base url       replay/experiment: baseline gateway
+  -patch url      replay/experiment: patch gateway
+  -fixture        replay/experiment: shop smoke requests (not span-derived)
+  -n int          replay: repeats (default 1). experiment: latency repeats (0 = plan default 20)
   -target url     fault: upstream gateway
   -listen addr    fault: loopback listen (default 127.0.0.1:19080)
   -delay dur      fault: injected delay before proxy or status
@@ -93,7 +99,10 @@ Flags:
 impact reads git diff on stdin. It does not apply the patch. env copies the shop
 and applies the diff only to patch. replay hits -base and -patch; match is not
 a pass. p95 is withheld unless n>=20. No regression threshold. fault listens on
-loopback only; an injected 502 is a differ, not a pass.
+loopback only; an injected 502 is a probe, not a pass. plan names env, behavior,
+latency, and (when runtime paths exist) an operator fault. experiment executes
+behavior and latency only; skipped operator steps are not a pass. There is no
+ask command.
 `
 }
 
@@ -111,19 +120,26 @@ func commandTimeout(args []string) time.Duration {
 	case "fault":
 		return 0
 	case "replay":
-		n := replayNFromArgs(args[1:])
-		d := time.Duration(n) * replayStepBudget
-		if d > maxReplayTimeout {
-			return maxReplayTimeout
-		}
-		return d
+		n := flagN(args[1:], 1)
+		return capReplayTimeout(n)
+	case "experiment":
+		n := flagN(args[1:], 20)
+		return capReplayTimeout(n)
 	default:
 		return defaultCommandTimeout
 	}
 }
 
-func replayNFromArgs(args []string) int {
-	n := 1
+func capReplayTimeout(n int) time.Duration {
+	d := time.Duration(n) * replayStepBudget
+	if d > maxReplayTimeout {
+		return maxReplayTimeout
+	}
+	return d
+}
+
+func flagN(args []string, def int) int {
+	n := def
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		var raw string

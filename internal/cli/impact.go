@@ -5,10 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 
-	"github.com/sumedhaerram/aquila/internal/diff"
 	"github.com/sumedhaerram/aquila/internal/impact"
 )
 
@@ -22,41 +20,35 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: impact: %w", err)
 	}
-	path := *file
-	if path == "" && fs.NArg() == 1 {
-		path = fs.Arg(0)
-	} else if fs.NArg() != 0 {
-		return fmt.Errorf("cli: impact: unexpected argument %q", fs.Arg(0))
-	}
-
-	var raw []byte
-	var err error
-	if path != "" {
-		raw, err = os.ReadFile(path)
-	} else {
-		raw, err = io.ReadAll(io.LimitReader(stdin, int64(diff.MaxBytes)+1))
-	}
+	path, err := diffPath(*file, fs.Args())
 	if err != nil {
 		return fmt.Errorf("cli: impact: %w", err)
 	}
-	if len(raw) == 0 {
-		return fmt.Errorf("cli: impact: empty diff")
-	}
-	if len(raw) > diff.MaxBytes {
-		return fmt.Errorf("cli: impact: diff too large")
+
+	raw, err := slurpDiff(stdin, path)
+	if err != nil {
+		return fmt.Errorf("cli: impact: %w", err)
 	}
 
-	c, err := newClient(*api)
+	rep, err := fetchImpact(ctx, *api, *traces, raw)
 	if err != nil {
-		return err
-	}
-	n := clipTraces(*traces)
-	var rep impact.Report
-	if err := c.postJSON(ctx, "/v1/impact?traces="+strconv.Itoa(n), "text/plain", raw, &rep); err != nil {
 		return err
 	}
 	writeImpact(stdout, rep)
 	return nil
+}
+
+func fetchImpact(ctx context.Context, api string, traces int, raw []byte) (impact.Report, error) {
+	c, err := newClient(api)
+	if err != nil {
+		return impact.Report{}, err
+	}
+	n := clipTraces(traces)
+	var rep impact.Report
+	if err := c.postJSON(ctx, "/v1/impact?traces="+strconv.Itoa(n), "text/plain", raw, &rep); err != nil {
+		return impact.Report{}, err
+	}
+	return rep, nil
 }
 
 func writeImpact(w io.Writer, rep impact.Report) {
