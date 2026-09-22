@@ -1,0 +1,219 @@
+x-shop-env: &shop-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+  POSTGRES_URL: postgres://shop:shop@shop-postgres:5432/shop?sslmode=disable
+  LOG_LEVEL: info
+  HTTP_ADDR: ":8080"
+  DEPLOYMENT_ENVIRONMENT: experiment
+
+x-shop-security: &shop-security
+  user: "65532:65532"
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 256m
+  cpus: "0.50"
+
+x-shop-health: &shop-health
+  test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector:0.122.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel.yaml:/etc/otelcol/config.yaml:ro
+    networks:
+      - shop
+
+  shop-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_DB: shop
+    volumes:
+      - shop_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - shop
+
+  shop-migrate:
+    image: migrate/migrate:v4.18.3
+    depends_on:
+      shop-postgres:
+        condition: service_healthy
+    volumes:
+      - ${SHOP_CONTEXT}/migrations:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://shop:shop@shop-postgres:5432/shop?sslmode=disable
+      - up
+    networks:
+      - shop
+    restart: "no"
+
+  shop-redis:
+    image: redis:7-alpine
+    environment:
+      REDISCLI_AUTH: shop
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "shop"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - shop
+
+  processor:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: processor
+    environment:
+      <<: *shop-env
+    depends_on:
+      - otel-collector
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+  users:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: users
+    environment:
+      <<: *shop-env
+    depends_on:
+      shop-migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+  inventory:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: inventory
+    environment:
+      <<: *shop-env
+      REDIS_URL: redis://:shop@shop-redis:6379/0
+    depends_on:
+      shop-migrate:
+        condition: service_completed_successfully
+      shop-redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+  payment:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: payment
+    environment:
+      <<: *shop-env
+      PROCESSOR_URL: http://processor:8080
+    depends_on:
+      shop-migrate:
+        condition: service_completed_successfully
+      processor:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+  notification:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: notification
+    environment:
+      <<: *shop-env
+    depends_on:
+      - otel-collector
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+  checkout:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: checkout
+    environment:
+      <<: *shop-env
+      USERS_URL: http://users:8080
+      INVENTORY_URL: http://inventory:8080
+      PAYMENT_URL: http://payment:8080
+      NOTIFICATION_URL: http://notification:8080
+    depends_on:
+      users:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      payment:
+        condition: service_healthy
+      notification:
+        condition: service_healthy
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+  gateway:
+    <<: *shop-security
+    build:
+      context: ${SHOP_CONTEXT}
+      dockerfile: Dockerfile
+      args:
+        SERVICE: gateway
+    environment:
+      <<: *shop-env
+      USERS_URL: http://users:8080
+      CHECKOUT_URL: http://checkout:8080
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT}:8080"
+    depends_on:
+      users:
+        condition: service_healthy
+      checkout:
+        condition: service_healthy
+    healthcheck: *shop-health
+    networks:
+      - shop
+
+networks:
+  shop:
+
+volumes:
+  shop_pg:

@@ -1,0 +1,8 @@
+diff --git a/examples/shop/internal/payment/handler.go b/examples/shop/internal/payment/handler.go
+--- a/examples/shop/internal/payment/handler.go
++++ b/examples/shop/internal/payment/handler.go
+@@ -143,4 +143,4 @@ func (h *Handler) chargeProcessor(ctx context.Context, req authorizeReq) error {
+ 	// INTENTIONAL DEFECT D1: new HTTP client on every authorize (DEFECTS.md).
+-	client := svcclient.NewEphemeral()
++	client := svcclient.Shared()
+ 	return svcclient.PostJSON(ctx, client, h.processorURL+"/charge", map[string]any{

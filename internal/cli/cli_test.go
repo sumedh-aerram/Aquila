@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +225,41 @@ func TestRunImpactPrintsDirectAndLikely(t *testing.T) {
 func TestRunImpactEmptyDiff(t *testing.T) {
 	t.Parallel()
 	err := RunImpact(t.Context(), []string{"-api", "http://127.0.0.1:8080"}, strings.NewReader(""), io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunEnvPrintsPrepared(t *testing.T) {
+	t.Parallel()
+	shop := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shop, "go.mod"), []byte("module example.com/s\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shop, "Dockerfile"), []byte("FROM alpine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(shop, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shop, "internal", "a.go"), []byte("package p\nconst X = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw := "--- a/internal/a.go\n+++ b/internal/a.go\n@@ -1,2 +1,2 @@\n package p\n-const X = 1\n+const X = 2\n"
+	var out strings.Builder
+	err := RunEnv(t.Context(), []string{"-shop", shop, "-out", t.TempDir()}, strings.NewReader(raw), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "status=prepared") || !strings.Contains(got, "not started") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunEnvEmptyDiff(t *testing.T) {
+	t.Parallel()
+	err := RunEnv(t.Context(), nil, strings.NewReader(""), io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
 	}

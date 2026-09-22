@@ -62,6 +62,7 @@ make build
 ./bin/aquila status
 ./bin/aquila observe -traces 20
 git diff -- examples/shop/internal/payment/handler.go | ./bin/aquila impact -traces 20
+git diff -- examples/shop/internal/payment/handler.go | ./bin/aquila env
 ```
 
 Requires Go 1.25+, Docker, and Compose. Starts the control plane, shop Postgres, Aquila Postgres, Redis, the OpenTelemetry Collector, Prometheus, Grafana, and the shop.
@@ -76,7 +77,7 @@ curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
 make down
 ```
 
-`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. `aquila status` and `aquila observe` print those APIs as text (`observed_parent` hops vs `code_attrs` binds). `aquila impact` POSTs a unified diff to `/v1/impact` and prints direct/likely/runtime/unobserved — it does not apply the patch or keep hunk bodies. Labeled D1–D6 diffs (`make impact-eval`) measure function recall on that engine; they are not extra shop bugs. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
+`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. `aquila status` and `aquila observe` print those APIs as text (`observed_parent` hops vs `code_attrs` binds). `aquila impact` POSTs a unified diff to `/v1/impact` and prints direct/likely/runtime/unobserved — it does not apply the patch or keep hunk bodies. Labeled D1–D6 diffs (`make impact-eval`) measure function recall on that engine; they are not extra shop bugs. `aquila env` copies `examples/shop` twice on the operator machine, applies the diff only to patch, and writes one compose file plus two env files (ports 18180/18280). It does not start containers, does not touch the live shop on 18080, and does not send experiment traces to the live Aquila store. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
 
 ## How it is put together
 

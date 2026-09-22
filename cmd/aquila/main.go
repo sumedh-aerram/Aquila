@@ -38,6 +38,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunObserve(ctx, args[1:], stdout, stderr)
 	case "impact":
 		return cli.RunImpact(ctx, args[1:], os.Stdin, stdout)
+	case "env":
+		return cli.RunEnv(ctx, args[1:], os.Stdin, stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -57,15 +59,19 @@ Commands:
   status     Control-plane health, ready, version
   observe    Runtime hops, source summary, span-to-source binds
   impact     Blast radius of a unified diff (direct, likely, runtime, unobserved)
+  env        Isolated baseline and patch shop trees from a diff (does not start)
   version    Print the Aquila version
   help       Show this help
 
 Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
   -traces int     observe/impact trace window (default 20, max 200)
-  -f path         impact: diff file (default stdin)
+  -f path         impact/env: diff file (default stdin)
+  -shop path      env: shop module (default examples/shop)
+  -out path       env: pair parent directory (default out/env)
 
 impact reads git diff on stdin. It does not apply the patch. Unmapped runtime
-stays unobserved. Experiments are later.
+stays unobserved. env copies the shop, applies the diff only to patch, and
+writes an equivalent compose file. It does not run containers or experiments.
 `
 }

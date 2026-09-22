@@ -34,7 +34,7 @@ func TestRunHelp(t *testing.T) {
 	if err := run([]string{"help"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "observe") || !strings.Contains(out.String(), "impact") {
+	if !strings.Contains(out.String(), "observe") || !strings.Contains(out.String(), "impact") || !strings.Contains(out.String(), "env") {
 		t.Fatalf("%q", out.String())
 	}
 }
