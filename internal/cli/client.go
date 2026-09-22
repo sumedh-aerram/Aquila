@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -56,6 +57,7 @@ func envAPI() string {
 }
 
 type httpStatusError struct {
+	method string
 	path   string
 	status int
 	body   string
@@ -63,9 +65,9 @@ type httpStatusError struct {
 
 func (e *httpStatusError) Error() string {
 	if e.body != "" {
-		return fmt.Sprintf("cli: GET %s: status %d: %s", e.path, e.status, e.body)
+		return fmt.Sprintf("cli: %s %s: status %d: %s", e.method, e.path, e.status, e.body)
 	}
-	return fmt.Sprintf("cli: GET %s: status %d", e.path, e.status)
+	return fmt.Sprintf("cli: %s %s: status %d", e.method, e.path, e.status)
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, dest any) error {
@@ -80,7 +82,31 @@ func (c *Client) getJSON(ctx context.Context, path string, dest any) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return &httpStatusError{path: path, status: resp.StatusCode, body: strings.TrimSpace(string(raw))}
+		return &httpStatusError{method: http.MethodGet, path: path, status: resp.StatusCode, body: strings.TrimSpace(string(raw))}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
+		return fmt.Errorf("cli: decode %s: %w", path, err)
+	}
+	return nil
+}
+
+func (c *Client) postJSON(ctx context.Context, path, contentType string, body []byte, dest any) error {
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("cli: %w", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("cli: POST %s: %w", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		return &httpStatusError{method: http.MethodPost, path: path, status: resp.StatusCode, body: strings.TrimSpace(string(raw))}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		return fmt.Errorf("cli: decode %s: %w", path, err)

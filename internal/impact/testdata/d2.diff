@@ -1,0 +1,11 @@
+diff --git a/examples/shop/internal/users/store.go b/examples/shop/internal/users/store.go
+--- a/examples/shop/internal/users/store.go
++++ b/examples/shop/internal/users/store.go
+@@ -85,7 +85,7 @@ func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
+ 	u.Addresses = make([]Address, 0, len(addrIDs))
+ 	for _, addrID := range addrIDs {
+ 		var a Address
+ 		err := s.pool.QueryRow(ctx,
+-			`SELECT id, line1, city FROM user_addresses WHERE id = $1`, addrID,
++			`SELECT id, line1, city FROM user_addresses WHERE user_id = $1`, id,
+ 		).Scan(&a.ID, &a.Line1, &a.City)

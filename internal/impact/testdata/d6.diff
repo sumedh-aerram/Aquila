@@ -1,0 +1,8 @@
+diff --git a/examples/shop/internal/inventory/handler.go b/examples/shop/internal/inventory/handler.go
+--- a/examples/shop/internal/inventory/handler.go
++++ b/examples/shop/internal/inventory/handler.go
+@@ -109,3 +109,3 @@ func (h *Handler) mutate(w http.ResponseWriter, r *http.Request, kind string) {
+ 	// INTENTIONAL D6: process-wide Redis lock (DEFECTS.md).
+-	ok, err := h.rdb.SetNX(ctx, "inventory:global", req.CheckoutID, 3*time.Second).Result()
++	ok, err := h.rdb.SetNX(ctx, "inventory:"+req.SKU, req.CheckoutID, 3*time.Second).Result()
+ 	if err != nil {

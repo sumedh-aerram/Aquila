@@ -1,0 +1,10 @@
+diff --git a/examples/shop/internal/checkout/handler.go b/examples/shop/internal/checkout/handler.go
+--- a/examples/shop/internal/checkout/handler.go
++++ b/examples/shop/internal/checkout/handler.go
+@@ -132,6 +132,6 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+ 	// INTENTIONAL D4: retry payment 5 times on any error with no backoff.
+ 	var payErr error
+-	for range 5 {
++	for range 1 {
+ 		payErr = svcclient.PostJSON(ctx, h.http, h.paymentURL+"/authorize", map[string]any{
+ 			"user_id": req.UserID, "checkout_id": checkoutID, "amount_cents": total,

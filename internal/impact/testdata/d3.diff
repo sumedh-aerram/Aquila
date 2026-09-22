@@ -1,0 +1,7 @@
+diff --git a/examples/shop/internal/inventory/handler.go b/examples/shop/internal/inventory/handler.go
+--- a/examples/shop/internal/inventory/handler.go
++++ b/examples/shop/internal/inventory/handler.go
+@@ -121,2 +121,2 @@ func (h *Handler) mutate(w http.ResponseWriter, r *http.Request, kind string) {
+ 	// INTENTIONAL D3: full scan of inventory_events by sku with no index.
+-	_, _ = h.pool.Exec(ctx, `SELECT COUNT(*) FROM inventory_events WHERE sku = $1`, req.SKU)
++	_, _ = h.pool.Exec(ctx, `SELECT COUNT(*) FROM inventory_events WHERE sku = $1 /* indexed */`, req.SKU)

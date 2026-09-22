@@ -1,0 +1,8 @@
+diff --git a/examples/shop/internal/checkout/handler.go b/examples/shop/internal/checkout/handler.go
+--- a/examples/shop/internal/checkout/handler.go
++++ b/examples/shop/internal/checkout/handler.go
+@@ -167,3 +167,3 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+ 	_ = svcclient.PostJSON(ctx, h.http, h.notificationURL+"/notify", map[string]any{
+-		"user_id": req.UserID, "checkout_id": checkoutID, "kind": "order_confirmed",
++		"user_id": req.UserID, "checkout_id": checkoutID, "kind": "order_queued",
+ 		}, nil)

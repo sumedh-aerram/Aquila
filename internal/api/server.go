@@ -45,6 +45,7 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	mux.HandleFunc("GET /v1/source", s.handleSource)
 	mux.HandleFunc("GET /v1/source/neighbors", s.handleSourceNeighbors)
 	mux.HandleFunc("GET /v1/locate", s.handleLocate)
+	mux.HandleFunc("POST /v1/impact", s.handleImpact)
 
 	readTimeout := cfg.Server.ReadTimeout
 	if readTimeout <= 0 {

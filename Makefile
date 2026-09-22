@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval
 
 help:
 	@printf '%s\n' \
@@ -41,6 +41,8 @@ help:
 		'  make source-smoke  Print the loaded shop source graph' \
 		'  make locate-smoke  Bind recent spans to source functions' \
 		'  make cli-smoke   aquila status and observe against local API' \
+		'  make impact-smoke  Pipe a D1-style payment diff through aquila impact' \
+		'  make impact-eval   Score labeled D1–D6 diffs (function recall)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -85,6 +87,23 @@ locate-smoke: ingest-smoke
 cli-smoke: ingest-smoke
 	$(GO) run ./cmd/aquila status -api http://127.0.0.1:8080
 	$(GO) run ./cmd/aquila observe -api http://127.0.0.1:8080 -traces 20
+
+impact-smoke: ingest-smoke
+	@printf '%s\n' \
+		'diff --git a/examples/shop/internal/payment/handler.go b/examples/shop/internal/payment/handler.go' \
+		'--- a/examples/shop/internal/payment/handler.go' \
+		'+++ b/examples/shop/internal/payment/handler.go' \
+		'@@ -142,7 +142,7 @@ func (h *Handler) chargeProcessor(ctx context.Context, req authorizeReq) error {' \
+		' 	// INTENTIONAL DEFECT D1: new HTTP client on every authorize (DEFECTS.md).' \
+		'-	client := svcclient.NewEphemeral()' \
+		'+	client := svcclient.Shared()' \
+		' 	return svcclient.PostJSON(ctx, client, h.processorURL+"/charge", map[string]any{' \
+		' 		"checkout_id":  req.CheckoutID,' \
+		' 		"amount_cents": req.AmountCents,' \
+	| $(GO) run ./cmd/aquila impact -api http://127.0.0.1:8080 -traces 20
+
+impact-eval:
+	$(GO) test -race -count=1 ./internal/impact -run 'TestEval|TestScore'
 
 fmt:
 	$(GO) fmt ./...

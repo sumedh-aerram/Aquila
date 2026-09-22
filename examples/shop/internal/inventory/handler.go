@@ -106,6 +106,7 @@ func (h *Handler) mutate(w http.ResponseWriter, r *http.Request, kind string) {
 		attribute.String("item.sku", req.SKU),
 	)
 
+	// INTENTIONAL D6: process-wide Redis lock (DEFECTS.md).
 	ok, err := h.rdb.SetNX(ctx, "inventory:global", req.CheckoutID, 3*time.Second).Result()
 	if err != nil {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "lock unavailable")

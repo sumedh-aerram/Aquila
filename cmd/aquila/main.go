@@ -36,6 +36,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunStatus(ctx, args[1:], stdout)
 	case "observe":
 		return cli.RunObserve(ctx, args[1:], stdout, stderr)
+	case "impact":
+		return cli.RunImpact(ctx, args[1:], os.Stdin, stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -54,14 +56,16 @@ Usage:
 Commands:
   status     Control-plane health, ready, version
   observe    Runtime hops, source summary, span-to-source binds
+  impact     Blast radius of a unified diff (direct, likely, runtime, unobserved)
   version    Print the Aquila version
   help       Show this help
 
 Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
-  -traces int     observe trace window (default 20, max 200)
+  -traces int     observe/impact trace window (default 20, max 200)
+  -f path         impact: diff file (default stdin)
 
-observe prints observed_parent hops from traces and code_attrs binds from
-instrumentation. Unmapped spans stay unmapped. Impact and experiments are later.
+impact reads git diff on stdin. It does not apply the patch. Unmapped runtime
+stays unobserved. Experiments are later.
 `
 }

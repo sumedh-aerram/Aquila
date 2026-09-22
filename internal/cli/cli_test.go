@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/graph"
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/locate"
 	"github.com/sumedhaerram/aquila/internal/source"
 )
@@ -191,5 +192,38 @@ func TestRunStatusTimeout(t *testing.T) {
 	err := RunStatus(ctx, []string{"-api", srv.URL}, io.Discard)
 	if err == nil {
 		t.Fatal("expected timeout")
+	}
+}
+
+func TestRunImpactPrintsDirectAndLikely(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/impact" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, impact.Report{
+			Files:  []string{"internal/payment/handler.go"},
+			Direct: []impact.Finding{{Name: "chargeProcessor", File: "internal/payment/handler.go", Reason: "changed_lines", Provenance: "diff"}},
+			Likely: []impact.Finding{{Name: "authorize", File: "internal/payment/handler.go", Reason: "caller", Provenance: "types"}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	err := RunImpact(t.Context(), []string{"-api", srv.URL}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "chargeProcessor") || !strings.Contains(got, "authorize") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunImpactEmptyDiff(t *testing.T) {
+	t.Parallel()
+	err := RunImpact(t.Context(), []string{"-api", "http://127.0.0.1:8080"}, strings.NewReader(""), io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }

@@ -1,0 +1,5 @@
+--- a/migrations/001_init.sql
++++ b/migrations/001_init.sql
+@@ -1 +1 @@
+-CREATE TABLE t (id int);
++CREATE TABLE t (id int, sku text);
