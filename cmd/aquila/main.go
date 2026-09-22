@@ -54,6 +54,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunPlan(ctx, args[1:], os.Stdin, stdout)
 	case "experiment":
 		return cli.RunExperiment(ctx, args[1:], os.Stdin, stdout)
+	case "report":
+		return cli.RunReport(ctx, args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -78,6 +80,7 @@ Commands:
   fault       Loopback reverse proxy that delays or injects a status
   plan        Minimum useful experiment DAG from impact (does not run it)
   experiment  Plan plus executed replay/latency against two gateways
+  report      Markdown from a saved evidence JSON file (does not re-run)
   version     Print the Aquila version
   help        Show this help
 
@@ -86,7 +89,7 @@ Flags:
   -traces int     observe/impact/plan/experiment trace window (default 20, max 200)
   -f path         impact/env/plan/experiment: diff file (default stdin)
   -shop path      env: shop module (default examples/shop)
-  -out path       env: pair parent directory (default out/env)
+  -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
@@ -101,8 +104,9 @@ and applies the diff only to patch. replay hits -base and -patch; match is not
 a pass. p95 is withheld unless n>=20. No regression threshold. fault listens on
 loopback only; an injected 502 is a probe, not a pass. plan names env, behavior,
 latency, and (when runtime paths exist) an operator fault. experiment executes
-behavior and latency only; skipped operator steps are not a pass. There is no
-ask command.
+behavior and latency only; skipped operator steps are not a pass. experiment
+-out writes evidence JSON (never validated). report renders that file as
+Markdown without hitting gateways. There is no ask command.
 `
 }
 

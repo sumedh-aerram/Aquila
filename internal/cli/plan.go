@@ -5,8 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
@@ -83,6 +88,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
 	limit := fs.Int("limit", 200, "span list limit when not using -fixture")
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
+	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
@@ -126,7 +132,22 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return err
 	}
+	art := evidence.Build(evidence.Input{
+		Now:      time.Now().UTC(),
+		Baseline: *base,
+		Patch:    *patch,
+		Workload: w,
+		Impact:   rep,
+		Plan:     dag,
+		Result:   ev,
+	})
 	writeEvidence(stdout, ev)
+	if *outPath != "" {
+		if err := writeEvidenceFile(*outPath, art); err != nil {
+			return err
+		}
+		writef(stdout, "wrote     %s\n", *outPath)
+	}
 	if ev.Overall == replay.VerdictIncomplete {
 		return fmt.Errorf("cli: experiment: incomplete")
 	}
@@ -156,4 +177,24 @@ func writeEvidence(w io.Writer, ev plan.Evidence) {
 		writef(w, "note         %s\n", n)
 	}
 	writef(w, "not validated. match is not a pass. skipped operator steps are not a pass.\n")
+}
+
+func writeEvidenceFile(path string, a evidence.Artifact) error {
+	if strings.Contains(path, "://") {
+		return fmt.Errorf("cli: experiment: -out must be a local file")
+	}
+	raw, err := evidence.Marshal(a)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("cli: experiment: %w", err)
+		}
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return fmt.Errorf("cli: experiment: %w", err)
+	}
+	return nil
 }

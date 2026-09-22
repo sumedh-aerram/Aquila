@@ -45,7 +45,7 @@ help:
 		'  make impact-eval   Score labeled D1–D6 diffs (function recall)' \
 		'  make env-smoke     Prepare an isolated baseline/patch pair from a D1 diff' \
 		'  make replay-eval   Replay, latency, and fault tests (no fake pass)' \
-		'  make plan-eval     Experiment plan and execute tests (no fake pass)' \
+		'  make plan-eval     Experiment plan, execute, and evidence-report tests (no fake pass)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -117,8 +117,8 @@ replay-eval:
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunReplay|TestRunFault|TestCommandTimeout|TestRunHelp'
 
 plan-eval:
-	$(GO) test -race -count=1 ./internal/plan
-	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunPlan|TestRunExperiment|TestCommandTimeout|TestRunHelp'
+	$(GO) test -race -count=1 ./internal/plan ./internal/evidence
+	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunPlan|TestRunExperiment|TestRunReport|TestCommandTimeout|TestRunHelp'
 
 fmt:
 	$(GO) fmt ./...

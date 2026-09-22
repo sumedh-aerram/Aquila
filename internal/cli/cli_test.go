@@ -639,6 +639,97 @@ func TestRunExperimentRequiresTargets(t *testing.T) {
 	}
 }
 
+func TestRunExperimentWritesEvidenceJSON(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"internal/payment/handler.go"},
+		Direct: []impact.Finding{{Name: "chargeProcessor"}},
+	})
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(gw.Close)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "evidence.json")
+	var out strings.Builder
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-out", path,
+	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "wrote") {
+		t.Fatalf("%s", out.String())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sku-widget") || strings.Contains(string(raw), `"validated": true`) {
+		t.Fatalf("bodies or validated true: %s", raw)
+	}
+	var md strings.Builder
+	if err := RunReport(t.Context(), []string{path}, &md); err != nil {
+		t.Fatal(err)
+	}
+	got := md.String()
+	if !strings.Contains(got, "overall: match") || !strings.Contains(got, "validated: false") || !strings.Contains(got, "not validated") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "overall: pass") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunExperimentWritesIncompleteEvidence(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"a.go"},
+		Direct: []impact.Finding{{Name: "F"}},
+	})
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(base.Close)
+	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	down.Close()
+	path := filepath.Join(t.TempDir(), "evidence.json")
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-out", path,
+	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("down patch must be incomplete, err=%v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"overall": "incomplete"`) {
+		t.Fatalf("%s", raw)
+	}
+}
+
+func TestRunReportRejectsPassArtifact(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "evidence.json")
+	raw := []byte(`{"schema":"aquila.evidence.v1","validated":false,"result":{"overall":"pass"}}`)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReport(t.Context(), []string{path}, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunReportRequiresPath(t *testing.T) {
+	t.Parallel()
+	err := RunReport(t.Context(), nil, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
