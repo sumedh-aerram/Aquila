@@ -264,3 +264,74 @@ func TestRunEnvEmptyDiff(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestRunReplayDetectsJSONDifference(t *testing.T) {
+	t.Parallel()
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(base.Close)
+	patch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok", "debug": true})
+	}))
+	t.Cleanup(patch.Close)
+	var out strings.Builder
+	err := RunReplay(t.Context(), []string{"-base", base.URL, "-patch", patch.URL, "-fixture"}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "verdict=differ") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "verdict=pass") || strings.Contains(got, "verdict=PASS") {
+		t.Fatalf("must not report pass: %s", got)
+	}
+}
+
+func TestRunReplayIncompleteWhenPatchDown(t *testing.T) {
+	t.Parallel()
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(base.Close)
+	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	down.Close()
+	err := RunReplay(t.Context(), []string{"-base", base.URL, "-patch", down.URL, "-fixture"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("down patch must be incomplete, err=%v", err)
+	}
+}
+
+func TestRunReplayRequiresBothTargets(t *testing.T) {
+	t.Parallel()
+	err := RunReplay(t.Context(), []string{"-fixture", "-base", "http://127.0.0.1:18180"}, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunReplayEmptySpansWithoutFixture(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/spans" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{"spans": []any{}})
+	}))
+	t.Cleanup(srv.Close)
+	err := RunReplay(t.Context(), []string{
+		"-api", srv.URL,
+		"-base", "http://127.0.0.1:18180",
+		"-patch", "http://127.0.0.1:18280",
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "empty workload") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func writeReplayJSON(w http.ResponseWriter, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
+}

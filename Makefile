@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval
 
 help:
 	@printf '%s\n' \
@@ -44,6 +44,7 @@ help:
 		'  make impact-smoke  Pipe a D1-style payment diff through aquila impact' \
 		'  make impact-eval   Score labeled D1–D6 diffs (function recall)' \
 		'  make env-smoke     Prepare an isolated baseline/patch pair from a D1 diff' \
+		'  make replay-eval   Replay/compare tests (difference and incomplete, not fake pass)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -109,6 +110,9 @@ impact-eval:
 env-smoke:
 	@rm -rf out/env-smoke
 	$(GO) run ./cmd/aquila env -shop examples/shop -out out/env-smoke -f internal/pair/testdata/d1.diff
+
+replay-eval:
+	$(GO) test -race -count=1 ./internal/replay ./internal/cli -run 'TestFromSpans|TestCompare|TestRunReplay|TestRunRecords|TestRunRejects'
 
 fmt:
 	$(GO) fmt ./...

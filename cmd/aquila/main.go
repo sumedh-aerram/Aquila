@@ -23,7 +23,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		printUsage(stdout)
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout(args))
 	defer cancel()
 	switch args[0] {
 	case "version", "--version", "-v":
@@ -40,6 +40,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunImpact(ctx, args[1:], os.Stdin, stdout)
 	case "env":
 		return cli.RunEnv(ctx, args[1:], os.Stdin, stdout)
+	case "replay":
+		return cli.RunReplay(ctx, args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -60,6 +62,7 @@ Commands:
   observe    Runtime hops, source summary, span-to-source binds
   impact     Blast radius of a unified diff (direct, likely, runtime, unobserved)
   env        Isolated baseline and patch shop trees from a diff (does not start)
+  replay     Same workload against two gateways; match/differ/incomplete
   version    Print the Aquila version
   help       Show this help
 
@@ -69,9 +72,19 @@ Flags:
   -f path         impact/env: diff file (default stdin)
   -shop path      env: shop module (default examples/shop)
   -out path       env: pair parent directory (default out/env)
+  -base url       replay: baseline gateway
+  -patch url      replay: patch gateway
+  -fixture        replay: shop smoke requests (not span-derived)
 
-impact reads git diff on stdin. It does not apply the patch. Unmapped runtime
-stays unobserved. env copies the shop, applies the diff only to patch, and
-writes an equivalent compose file. It does not run containers or experiments.
+impact reads git diff on stdin. It does not apply the patch. env copies the shop
+and applies the diff only to patch. replay hits -base and -patch; match is not
+a pass. Durations are observations, not a regression claim.
 `
+}
+
+func commandTimeout(args []string) time.Duration {
+	if len(args) > 0 && args[0] == "replay" {
+		return 45 * time.Second
+	}
+	return 15 * time.Second
 }
