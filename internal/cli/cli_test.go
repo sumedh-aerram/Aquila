@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -287,6 +289,9 @@ func TestRunReplayDetectsJSONDifference(t *testing.T) {
 	if strings.Contains(got, "verdict=pass") || strings.Contains(got, "verdict=PASS") {
 		t.Fatalf("must not report pass: %s", got)
 	}
+	if !strings.Contains(got, "p95=withheld") {
+		t.Fatalf("n=1 must withhold p95: %s", got)
+	}
 }
 
 func TestRunReplayIncompleteWhenPatchDown(t *testing.T) {
@@ -334,4 +339,154 @@ func TestRunReplayEmptySpansWithoutFixture(t *testing.T) {
 func writeReplayJSON(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func TestRunReplayRepeatsAndWithholdsP95(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	err := RunReplay(t.Context(), []string{"-base", srv.URL, "-patch", srv.URL, "-fixture", "-n", "3"}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if hits.Load() != 18 {
+		t.Fatalf("hits=%d want 18 (3 steps × 3 repeats × 2 targets)", hits.Load())
+	}
+	if !strings.Contains(got, "n=3") || !strings.Contains(got, "p95=withheld") || !strings.Contains(got, "verdict=match") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "verdict=pass") || strings.Contains(got, "verdict=PASS") {
+		t.Fatalf("must not report pass: %s", got)
+	}
+}
+
+func TestRunReplayRejectsHugeN(t *testing.T) {
+	t.Parallel()
+	err := RunReplay(t.Context(), []string{
+		"-base", "http://127.0.0.1:18180",
+		"-patch", "http://127.0.0.1:18280",
+		"-fixture",
+		"-n", "101",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunFaultRequiresTarget(t *testing.T) {
+	t.Parallel()
+	err := RunFault(t.Context(), []string{"-listen", "127.0.0.1:0"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "target") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestRunFaultRejectsNonLoopback(t *testing.T) {
+	t.Parallel()
+	err := RunFault(t.Context(), []string{"-listen", "0.0.0.0:19080", "-target", "http://127.0.0.1:18180"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestRunFaultRejectsHugeDelay(t *testing.T) {
+	t.Parallel()
+	err := RunFault(t.Context(), []string{"-listen", "127.0.0.1:0", "-target", "http://127.0.0.1:18180", "-delay", "31s"}, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunFaultInjectsThenStops(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits++
+	}))
+	t.Cleanup(up.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	out := &syncWriter{}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- RunFault(ctx, []string{"-listen", "127.0.0.1:0", "-target", up.URL, "-status", "502"}, out)
+	}()
+	var addr string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("fault exited: %v out=%q", err, out.String())
+		default:
+		}
+		addr = listenHostPort(out.String())
+		if addr != "" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if addr == "" {
+		t.Fatalf("no listen line: %q", out.String())
+	}
+	resp, err := http.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(body), "injected") {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	if hits != 0 {
+		t.Fatal("injected status must not call upstream")
+	}
+	got := out.String()
+	if strings.Contains(got, "verdict=pass") || strings.Contains(got, "verdict=PASS") {
+		t.Fatalf("must not report pass: %s", got)
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fault did not stop")
+	}
+}
+
+func listenHostPort(out string) string {
+	const p = "listen="
+	i := strings.Index(out, p)
+	if i < 0 {
+		return ""
+	}
+	rest := out[i+len(p):]
+	if j := strings.IndexByte(rest, ' '); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
+}
+
+type syncWriter struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncWriter) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

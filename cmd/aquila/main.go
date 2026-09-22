@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/cli"
@@ -23,7 +25,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		printUsage(stdout)
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout(args))
+	ctx := context.Background()
+	cancel := func() {}
+	if d := commandTimeout(args); d > 0 {
+		ctx, cancel = context.WithTimeout(ctx, d)
+	}
 	defer cancel()
 	switch args[0] {
 	case "version", "--version", "-v":
@@ -42,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunEnv(ctx, args[1:], os.Stdin, stdout)
 	case "replay":
 		return cli.RunReplay(ctx, args[1:], stdout)
+	case "fault":
+		return cli.RunFault(ctx, args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -63,6 +71,7 @@ Commands:
   impact     Blast radius of a unified diff (direct, likely, runtime, unobserved)
   env        Isolated baseline and patch shop trees from a diff (does not start)
   replay     Same workload against two gateways; match/differ/incomplete
+  fault      Loopback reverse proxy that delays or injects a status
   version    Print the Aquila version
   help       Show this help
 
@@ -75,16 +84,66 @@ Flags:
   -base url       replay: baseline gateway
   -patch url      replay: patch gateway
   -fixture        replay: shop smoke requests (not span-derived)
+  -n int          replay: repeats for latency samples (default 1, max 100)
+  -target url     fault: upstream gateway
+  -listen addr    fault: loopback listen (default 127.0.0.1:19080)
+  -delay dur      fault: injected delay before proxy or status
+  -status int     fault: if set, return this status and do not proxy
 
 impact reads git diff on stdin. It does not apply the patch. env copies the shop
 and applies the diff only to patch. replay hits -base and -patch; match is not
-a pass. Durations are observations, not a regression claim.
+a pass. p95 is withheld unless n>=20. No regression threshold. fault listens on
+loopback only; an injected 502 is a differ, not a pass.
 `
 }
 
+const (
+	defaultCommandTimeout = 15 * time.Second
+	replayStepBudget      = 45 * time.Second
+	maxReplayTimeout      = 8 * time.Minute
+)
+
 func commandTimeout(args []string) time.Duration {
-	if len(args) > 0 && args[0] == "replay" {
-		return 45 * time.Second
+	if len(args) == 0 {
+		return defaultCommandTimeout
 	}
-	return 15 * time.Second
+	switch args[0] {
+	case "fault":
+		return 0
+	case "replay":
+		n := replayNFromArgs(args[1:])
+		d := time.Duration(n) * replayStepBudget
+		if d > maxReplayTimeout {
+			return maxReplayTimeout
+		}
+		return d
+	default:
+		return defaultCommandTimeout
+	}
+}
+
+func replayNFromArgs(args []string) int {
+	n := 1
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		var raw string
+		switch {
+		case a == "-n" && i+1 < len(args):
+			raw = args[i+1]
+			i++
+		case strings.HasPrefix(a, "-n="):
+			raw = strings.TrimPrefix(a, "-n=")
+		default:
+			continue
+		}
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 {
+			continue
+		}
+		n = v
+	}
+	if n > 100 {
+		n = 100
+	}
+	return n
 }

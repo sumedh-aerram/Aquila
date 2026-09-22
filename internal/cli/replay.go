@@ -21,6 +21,7 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 	patch := fs.String("patch", "", "patch gateway URL")
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
 	limit := fs.Int("limit", 200, "span list limit when not using -fixture")
+	n := fs.Int("n", 1, "replay repeats for latency samples (p95 withheld below 20)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: replay: %w", err)
 	}
@@ -51,24 +52,25 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("cli: replay: empty workload (no gateway routes in spans; try -fixture)")
 	}
 
-	baseRes, err := replay.Run(ctx, *base, w)
+	baseRuns, err := replay.Repeat(ctx, *base, w, *n)
 	if err != nil {
 		return err
 	}
-	patchRes, err := replay.Run(ctx, *patch, w)
+	patchRuns, err := replay.Repeat(ctx, *patch, w, *n)
 	if err != nil {
 		return err
 	}
-	rep := replay.Compare(baseRes, patchRes)
-	writeReplay(stdout, w, baseRes, patchRes, rep)
+	rep := replay.Compare(baseRuns[0], patchRuns[0])
+	lat := replay.Latency(baseRuns, patchRuns)
+	writeReplay(stdout, w, baseRuns[0], patchRuns[0], rep, lat, len(baseRuns))
 	if rep.Verdict == replay.VerdictIncomplete {
 		return fmt.Errorf("cli: replay: incomplete")
 	}
 	return nil
 }
 
-func writeReplay(w io.Writer, load replay.Workload, base, patch replay.Result, rep replay.Report) {
-	writef(w, "replay   steps=%d  verdict=%s\n", len(load.Steps), rep.Verdict)
+func writeReplay(w io.Writer, load replay.Workload, base, patch replay.Result, rep replay.Report, lat []replay.StepLatency, n int) {
+	writef(w, "replay   steps=%d  verdict=%s  n=%d\n", len(load.Steps), rep.Verdict, n)
 	writef(w, "baseline %s\n", base.Target)
 	writef(w, "patch    %s\n", patch.Target)
 	for i, st := range load.Steps {
@@ -85,8 +87,11 @@ func writeReplay(w io.Writer, load replay.Workload, base, patch replay.Result, r
 		writef(w, "  %s %s  %s  %s/%s  %s/%s%s\n",
 			st.Method, st.Path, ver, bs, ps, formatDur(bd), formatDur(pd), note)
 		writef(w, "    provenance %s\n", st.Provenance)
+		if i < len(lat) {
+			writef(w, "    latency    %s\n", formatLatency(lat[i]))
+		}
 	}
-	writef(w, "not validated. match is not a pass. durations are observations, not a regression claim.\n")
+	writef(w, "not validated. match is not a pass. p95 is withheld unless n>=20. no regression threshold.\n")
 }
 
 func stepStatus(res replay.Result, i int) (status string, dur int64) {
@@ -106,6 +111,23 @@ func formatDur(ns int64) string {
 	}
 	ms := float64(ns) / 1e6
 	return strconv.FormatFloat(ms, 'f', 1, 64) + "ms"
+}
+
+func formatLatency(s replay.StepLatency) string {
+	return "base " + formatSummary(s.Baseline) + "  patch " + formatSummary(s.Patch)
+}
+
+func formatSummary(s replay.Summary) string {
+	if s.N == 0 {
+		return "n=0"
+	}
+	out := "n=" + strconv.Itoa(s.N) + "  median=" + formatDur(s.MedNS)
+	if s.HasP95 {
+		out += "  p95=" + formatDur(s.P95NS)
+	} else {
+		out += "  p95=withheld"
+	}
+	return out
 }
 
 func joinNotes(notes []string) string {

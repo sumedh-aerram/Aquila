@@ -44,7 +44,7 @@ help:
 		'  make impact-smoke  Pipe a D1-style payment diff through aquila impact' \
 		'  make impact-eval   Score labeled D1–D6 diffs (function recall)' \
 		'  make env-smoke     Prepare an isolated baseline/patch pair from a D1 diff' \
-		'  make replay-eval   Replay/compare tests (difference and incomplete, not fake pass)' \
+		'  make replay-eval   Replay, latency, and fault tests (no fake pass)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -112,7 +112,8 @@ env-smoke:
 	$(GO) run ./cmd/aquila env -shop examples/shop -out out/env-smoke -f internal/pair/testdata/d1.diff
 
 replay-eval:
-	$(GO) test -race -count=1 ./internal/replay ./internal/cli -run 'TestFromSpans|TestCompare|TestRunReplay|TestRunRecords|TestRunRejects'
+	$(GO) test -race -count=1 ./internal/replay ./internal/fault
+	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunReplay|TestRunFault|TestCommandTimeout|TestRunHelp'
 
 fmt:
 	$(GO) fmt ./...

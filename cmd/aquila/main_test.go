@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -34,7 +35,7 @@ func TestRunHelp(t *testing.T) {
 	if err := run([]string{"help"}, &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "observe") || !strings.Contains(out.String(), "impact") || !strings.Contains(out.String(), "env") || !strings.Contains(out.String(), "replay") {
+	if !strings.Contains(out.String(), "observe") || !strings.Contains(out.String(), "impact") || !strings.Contains(out.String(), "env") || !strings.Contains(out.String(), "replay") || !strings.Contains(out.String(), "fault") {
 		t.Fatalf("%q", out.String())
 	}
 }
@@ -43,5 +44,25 @@ func TestRunNoArgs(t *testing.T) {
 	t.Parallel()
 	if err := run(nil, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCommandTimeoutFaultIsUnlimited(t *testing.T) {
+	t.Parallel()
+	if commandTimeout([]string{"fault", "-target", "http://127.0.0.1:18180"}) != 0 {
+		t.Fatal("fault must not have a process timeout")
+	}
+}
+
+func TestCommandTimeoutReplayScalesWithN(t *testing.T) {
+	t.Parallel()
+	if got := commandTimeout([]string{"replay"}); got != 45*time.Second {
+		t.Fatalf("default n=1 timeout=%s", got)
+	}
+	if got := commandTimeout([]string{"replay", "-n", "2"}); got != 90*time.Second {
+		t.Fatalf("n=2 timeout=%s", got)
+	}
+	if got := commandTimeout([]string{"replay", "-n=100"}); got != 8*time.Minute {
+		t.Fatalf("n=100 must cap, got %s", got)
 	}
 }
