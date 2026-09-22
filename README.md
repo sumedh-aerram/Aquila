@@ -77,7 +77,7 @@ curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
 make down
 ```
 
-`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. `aquila status` and `aquila observe` print those APIs as text (`observed_parent` hops vs `code_attrs` binds). `aquila impact` POSTs a unified diff to `/v1/impact` and prints direct/likely/runtime/unobserved — it does not apply the patch or keep hunk bodies. Labeled D1–D6 diffs (`make impact-eval`) measure function recall on that engine; they are not extra shop bugs. `aquila env` copies `examples/shop` twice on the operator machine, applies the diff only to patch, and writes one compose file plus two env files (ports 18180/18280). It does not start containers, does not touch the live shop on 18080, and does not send experiment traces to the live Aquila store. `aquila replay -base … -patch … [-n 20]` sends the same workload to two gateways and reports match, differ, or incomplete. Span routes are allowlisted gateway paths only; POST bodies come from the shop fixture, never from traces. Match is not a pass. Median is printed from successful samples; p95 is withheld unless n≥20. There is no regression threshold. `aquila fault -target …` is a loopback reverse proxy that can delay or inject a status; point replay at that listen address. An injected 502 is a probe, not a pass. `aquila plan` turns impact into the smallest DAG Aquila can currently name (env, behavior, latency, and an operator fault when runtime paths exist). `aquila experiment -base … -patch … [-out out/evidence.json]` executes behavior and latency only; skipped operator steps are not a pass. `-out` writes evidence JSON (`validated` is always false; request bodies are omitted). `aquila report out/evidence.json` renders that file as Markdown and does not re-hit gateways. There is no `ask` command yet. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
+`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. `aquila status` and `aquila observe` print those APIs as text (`observed_parent` hops vs `code_attrs` binds). `aquila impact` POSTs a unified diff to `/v1/impact` and prints direct/likely/runtime/unobserved — it does not apply the patch or keep hunk bodies. Labeled D1–D6 diffs (`make impact-eval`) measure function recall on that engine; they are not extra shop bugs. `aquila env` copies `examples/shop` twice on the operator machine, applies the diff only to patch, and writes one compose file plus two env files (ports 18180/18280). It does not start containers, does not touch the live shop on 18080, and does not send experiment traces to the live Aquila store. `aquila replay -base … -patch … [-n 20]` sends the same workload to two gateways and reports match, differ, or incomplete. Span routes are allowlisted gateway paths only; POST bodies come from the shop fixture, never from traces. Match is not a pass. Median is printed from successful samples; p95 is withheld unless n≥20. There is no regression threshold. `aquila fault -target …` is a loopback reverse proxy that can delay or inject a status; point replay at that listen address. An injected 502 is a probe, not a pass. `aquila plan` turns impact into the smallest DAG Aquila can currently name (env, behavior, latency, and an operator fault when runtime paths exist). `aquila experiment -base … -patch … [-out out/evidence.json]` executes behavior and latency only; skipped operator steps are not a pass. `-out` writes evidence JSON (`validated` is always false; request bodies are omitted). The same artifact is POSTed to `/v1/runs` when the API is up; if the store is down the CLI prints `unrecorded` and still keeps the local file. `aquila runs` lists stored evidence, `aquila runs <id>` shows one, `aquila runs -f out/evidence.json` imports a file. `aquila report out/evidence.json` renders that file as Markdown and does not re-hit gateways. There is no `ask` command yet. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
 
 ## How it is put together
 
@@ -105,9 +105,32 @@ make down
 
 Shop services export OTLP/gRPC to the collector. The collector forwards OTLP/HTTP to Aquila so checkout never waits on the control plane. Runtime topology is computed from a window of complete traces, in process. The source graph is loaded from a live module directory (`AQUILA_SOURCE_DIR`) or from a JSON snapshot (`AQUILA_SOURCE_SNAPSHOT`) so the API image does not ship a Go toolchain.
 
-Experiments are **jobs**: identity, baseline SHA, patch SHA, workload digest, attempt, lease, result. Workers heartbeat; expired work is retaken; a stale attempt cannot commit. Kubernetes may host those workers. It does not replace the scheduler, the lease, or content-addressed artifacts.
+Experiments are **jobs** with identity: git SHA, dirty worktree, workload digest, artifact digest. Today those records live in PostgreSQL (`aquila.runs`) after `aquila experiment`. There is no worker queue yet. Duplicate POSTs with the same digest are idempotent. `validated` cannot be true in the table. Workers, leases, and fencing come after this local loop is something you would actually run from another checkout.
 
 Ingest privacy and sandbox bounds: [docs/SECURITY.md](docs/SECURITY.md).
+
+## Another checkout
+
+Aquila is meant to sit beside work in a different repo—not only `examples/shop`. The shop is the reference system and the only Compose env Aquila can prepare.
+
+From Libra, Reroute, or any other instrumented HTTP service:
+
+1. Point the **control plane** at that module and restart it (`AQUILA_SOURCE_DIR=/path/to/libra`). Locate and impact use the source graph loaded at process start, not your shell cwd.
+2. Export OTLP from that process into the same collector `make dev` already runs (or ingest directly with `AQUILA_INGEST_TOKEN` if set).
+3. Put `./bin/aquila` on `PATH`. The CLI talks to `AQUILA_API_URL` (default `http://127.0.0.1:8080`) and does not need to be launched from this repository.
+4. Start **two** isolated gateways yourself. `aquila env` copies the shop Compose shape and will not boot Libra.
+5. Do not pass `-fixture` (that is shop checkout smoke). Replay uses allowlisted gateway routes from stored spans.
+
+```bash
+export AQUILA_API_URL=http://127.0.0.1:8080
+cd /path/to/libra
+git diff | aquila impact -traces 20
+git diff | aquila experiment -dir . -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out /tmp/evidence.json
+aquila runs
+aquila report /tmp/evidence.json
+```
+
+`-dir` is the git work tree under change so the stored run records **that** HEAD, not Aquila’s. If the other app does not set `code.function.name` and `code.file.path` on spans, locate stays unmapped and impact runtime stays empty. That is correct. Match is not a pass. Stored runs have `validated=false`.
 
 ## Stack
 

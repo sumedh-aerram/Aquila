@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval
 
 help:
 	@printf '%s\n' \
@@ -46,6 +46,7 @@ help:
 		'  make env-smoke     Prepare an isolated baseline/patch pair from a D1 diff' \
 		'  make replay-eval   Replay, latency, and fault tests (no fake pass)' \
 		'  make plan-eval     Experiment plan, execute, and evidence-report tests (no fake pass)' \
+		'  make runs-eval     Persist experiment runs in the control plane (no fake pass)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -119,6 +120,11 @@ replay-eval:
 plan-eval:
 	$(GO) test -race -count=1 ./internal/plan ./internal/evidence
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunPlan|TestRunExperiment|TestRunReport|TestCommandTimeout|TestRunHelp'
+
+runs-eval:
+	$(GO) test -race -count=1 ./internal/runs ./internal/gitrev ./internal/evidence
+	$(GO) test -race -count=1 ./internal/api -run 'TestCreateRun|TestGetRun'
+	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunExperimentRecords|TestRunRuns|TestRunHelp'
 
 fmt:
 	$(GO) fmt ./...

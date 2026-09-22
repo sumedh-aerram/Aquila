@@ -8,6 +8,7 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/ingest"
+	"github.com/sumedhaerram/aquila/internal/runs"
 	"github.com/sumedhaerram/aquila/internal/source"
 	"github.com/sumedhaerram/aquila/internal/version"
 )
@@ -17,16 +18,18 @@ type Dependencies struct {
 	Ready  ReadyChecker
 	Spans  ingest.Store
 	Source *source.Graph
+	Runs   runs.Store
 }
 
 // Server is the control-plane HTTP surface.
 type Server struct {
-	cfg   config.Config
-	log   *slog.Logger
-	ready ReadyChecker
-	spans ingest.Store
-	src   *source.Graph
-	http  *http.Server
+	cfg      config.Config
+	log      *slog.Logger
+	ready    ReadyChecker
+	spans    ingest.Store
+	src      *source.Graph
+	runStore runs.Store
+	http     *http.Server
 }
 
 // NewServer constructs the HTTP API.
@@ -34,7 +37,7 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source}
+	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source, runStore: deps.Runs}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
@@ -46,6 +49,9 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	mux.HandleFunc("GET /v1/source/neighbors", s.handleSourceNeighbors)
 	mux.HandleFunc("GET /v1/locate", s.handleLocate)
 	mux.HandleFunc("POST /v1/impact", s.handleImpact)
+	mux.HandleFunc("POST /v1/runs", s.handleCreateRun)
+	mux.HandleFunc("GET /v1/runs", s.handleListRuns)
+	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 
 	readTimeout := cfg.Server.ReadTimeout
 	if readTimeout <= 0 {

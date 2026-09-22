@@ -36,7 +36,7 @@ func TestRunHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"observe", "impact", "env", "replay", "fault", "plan", "experiment", "report"} {
+	for _, want := range []string{"observe", "impact", "env", "replay", "fault", "plan", "experiment", "report", "runs"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}

@@ -17,8 +17,21 @@ func Markdown(a Artifact) string {
 		b.WriteString("recorded: " + a.Recorded.UTC().Format("2006-01-02T15:04:05Z") + "\n")
 	}
 	b.WriteString("overall: " + a.Result.Overall + "\n")
-	b.WriteString("validated: false\n\n")
-	b.WriteString("## Gateways\n\n")
+	b.WriteString("validated: false\n")
+	if a.BaselineSHA != "" {
+		dirty := "clean"
+		if a.Dirty {
+			dirty = "dirty"
+		}
+		b.WriteString("git: " + a.BaselineSHA + "  " + dirty + "\n")
+	}
+	if a.WorkloadDigest != "" {
+		b.WriteString("workload: " + a.WorkloadDigest + "\n")
+	}
+	if a.ArtifactDigest != "" {
+		b.WriteString("artifact: " + a.ArtifactDigest + "\n")
+	}
+	b.WriteString("\n## Gateways\n\n")
 	b.WriteString("- baseline: " + a.Baseline + "\n")
 	b.WriteString("- patch: " + a.Patch + "\n\n")
 	b.WriteString("## Impact\n\n")

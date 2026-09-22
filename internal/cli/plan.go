@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
@@ -89,6 +90,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	limit := fs.Int("limit", 200, "span list limit when not using -fixture")
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
 	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
+	dir := fs.String("dir", ".", "git directory for baseline SHA (the repo under change)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
@@ -132,22 +134,36 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return err
 	}
+	sha, dirty, err := gitrev.State(ctx, *dir)
+	if err != nil {
+		return fmt.Errorf("cli: experiment: %w", err)
+	}
 	art := evidence.Build(evidence.Input{
-		Now:      time.Now().UTC(),
-		Baseline: *base,
-		Patch:    *patch,
-		Workload: w,
-		Impact:   rep,
-		Plan:     dag,
-		Result:   ev,
+		Now:         time.Now().UTC(),
+		Baseline:    *base,
+		Patch:       *patch,
+		BaselineSHA: sha,
+		Dirty:       dirty,
+		Workload:    w,
+		Impact:      rep,
+		Plan:        dag,
+		Result:      ev,
 	})
 	writeEvidence(stdout, ev)
+	if sha != "" {
+		state := "clean"
+		if dirty {
+			state = "dirty"
+		}
+		writef(stdout, "git       %s  %s\n", sha, state)
+	}
 	if *outPath != "" {
 		if err := writeEvidenceFile(*outPath, art); err != nil {
 			return err
 		}
 		writef(stdout, "wrote     %s\n", *outPath)
 	}
+	recordRun(ctx, *api, stdout, art)
 	if ev.Overall == replay.VerdictIncomplete {
 		return fmt.Errorf("cli: experiment: incomplete")
 	}

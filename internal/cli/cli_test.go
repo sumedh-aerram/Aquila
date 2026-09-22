@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -14,9 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/locate"
+	"github.com/sumedhaerram/aquila/internal/plan"
+	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/runs"
 	"github.com/sumedhaerram/aquila/internal/source"
 )
 
@@ -565,7 +570,7 @@ func TestRunExperimentMatchIsNotPass(t *testing.T) {
 	t.Cleanup(gw.Close)
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1",
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -601,7 +606,7 @@ func TestRunExperimentDetectsJSONDifference(t *testing.T) {
 	t.Cleanup(patch.Close)
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", base.URL, "-patch", patch.URL, "-fixture", "-n", "1",
+		"-api", api.URL, "-base", base.URL, "-patch", patch.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -624,7 +629,7 @@ func TestRunExperimentIncompleteWhenPatchDown(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	down.Close()
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1",
+		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
 	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("down patch must be incomplete, err=%v", err)
@@ -653,7 +658,7 @@ func TestRunExperimentWritesEvidenceJSON(t *testing.T) {
 	path := filepath.Join(dir, "evidence.json")
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-out", path,
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-out", path, "-dir", dir,
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -695,7 +700,7 @@ func TestRunExperimentWritesIncompleteEvidence(t *testing.T) {
 	down.Close()
 	path := filepath.Join(t.TempDir(), "evidence.json")
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-out", path,
+		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-out", path, "-dir", t.TempDir(),
 	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("down patch must be incomplete, err=%v", err)
@@ -728,6 +733,157 @@ func TestRunReportRequiresPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+}
+
+func TestRunExperimentRecordsRun(t *testing.T) {
+	t.Parallel()
+	api, store := experimentAPI(t, impact.Report{
+		Files:  []string{"internal/payment/handler.go"},
+		Direct: []impact.Finding{{Name: "chargeProcessor"}},
+	})
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(gw.Close)
+	var out strings.Builder
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "stored") || strings.Contains(got, "unrecorded") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "overall=pass") {
+		t.Fatalf("%s", got)
+	}
+	listed, err := store.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Validated || listed[0].Overall != replay.VerdictMatch {
+		t.Fatalf("%+v", listed)
+	}
+}
+
+func TestRunRunsImportAndGet(t *testing.T) {
+	t.Parallel()
+	api, store := experimentAPI(t, impact.Report{})
+	path := filepath.Join(t.TempDir(), "evidence.json")
+	art := evidence.Build(evidence.Input{
+		Now:      time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:   impact.Report{Files: []string{"a.go"}},
+		Result:   plan.Evidence{Overall: replay.VerdictDiffer, Notes: []string{"not validated"}},
+	})
+	raw, err := evidence.Marshal(art)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := RunRuns(t.Context(), []string{"-api", api.URL, "-f", path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "stored") || strings.Contains(out.String(), "overall=pass") {
+		t.Fatalf("%s", out.String())
+	}
+	listed, err := store.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("%+v", listed)
+	}
+	var listOut strings.Builder
+	if err := RunRuns(t.Context(), []string{"-api", api.URL}, &listOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listOut.String(), listed[0].ID) || !strings.Contains(listOut.String(), "overall=differ") {
+		t.Fatalf("%s", listOut.String())
+	}
+	var getOut strings.Builder
+	if err := RunRuns(t.Context(), []string{"-api", api.URL, listed[0].ID}, &getOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(getOut.String(), "overall=differ") || strings.Contains(getOut.String(), "overall=pass") {
+		t.Fatalf("%s", getOut.String())
+	}
+}
+
+func TestRunRunsRejectsInvalidID(t *testing.T) {
+	t.Parallel()
+	err := RunRuns(t.Context(), []string{"-api", "http://127.0.0.1:8080", "../spans"}, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func experimentAPI(t *testing.T, rep impact.Report) (*httptest.Server, *runs.Memory) {
+	t.Helper()
+	store := runs.NewMemory()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/impact":
+			writeTestJSON(w, rep)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
+			raw, err := io.ReadAll(io.LimitReader(r.Body, int64(evidence.MaxBytes)+1))
+			if err != nil {
+				http.Error(w, "invalid artifact", http.StatusBadRequest)
+				return
+			}
+			a, err := evidence.Decode(bytes.NewReader(raw))
+			if err != nil {
+				http.Error(w, "invalid artifact", http.StatusBadRequest)
+				return
+			}
+			rec, err := store.Insert(r.Context(), runs.Record{Artifact: a})
+			if err != nil {
+				http.Error(w, "store failed", http.StatusInternalServerError)
+				return
+			}
+			writeTestJSON(w, map[string]any{
+				"id": rec.ID, "overall": rec.Overall, "validated": false,
+				"artifact_digest": rec.ArtifactDigest, "baseline_sha": rec.BaselineSHA, "dirty": rec.Dirty,
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs":
+			list, err := store.List(r.Context(), runs.DefaultList)
+			if err != nil {
+				http.Error(w, "store failed", http.StatusInternalServerError)
+				return
+			}
+			out := make([]map[string]any, 0, len(list))
+			for _, rec := range list {
+				out = append(out, map[string]any{
+					"id": rec.ID, "overall": rec.Overall, "validated": false,
+					"artifact_digest": rec.ArtifactDigest, "baseline_sha": rec.BaselineSHA, "dirty": rec.Dirty,
+				})
+			}
+			writeTestJSON(w, map[string]any{"runs": out})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/runs/"):
+			id := strings.TrimPrefix(r.URL.Path, "/v1/runs/")
+			rec, err := store.Get(r.Context(), id)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			writeTestJSON(w, map[string]any{
+				"id": rec.ID, "overall": rec.Overall, "validated": false,
+				"artifact_digest": rec.ArtifactDigest, "baseline_sha": rec.BaselineSHA, "dirty": rec.Dirty,
+				"artifact": rec.Artifact,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, store
 }
 
 func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {

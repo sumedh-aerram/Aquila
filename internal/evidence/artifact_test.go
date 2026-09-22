@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,9 @@ func TestBuildOmitsBodiesAndIsNeverValidated(t *testing.T) {
 	}
 	if bytes.Contains(raw, []byte(`"validated": true`)) {
 		t.Fatal("validated must be false")
+	}
+	if a.WorkloadDigest == "" || a.ArtifactDigest == "" {
+		t.Fatal("digests required on built artifacts")
 	}
 }
 
@@ -109,6 +113,31 @@ func TestRoundTripJSON(t *testing.T) {
 	}
 	if !EqualJSON(a, got) {
 		t.Fatalf("round trip mismatch\n%s", raw)
+	}
+}
+
+func TestDecodeRejectsArtifactDigestMismatch(t *testing.T) {
+	t.Parallel()
+	a := sampleDiffer(t)
+	a.ArtifactDigest = strings.Repeat("a", 64)
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(raw)); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDecodeAllowsLegacyWithoutDigest(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{"schema":"aquila.evidence.v1","validated":false,"baseline":"http://127.0.0.1:18180","patch":"http://127.0.0.1:18280","result":{"overall":"match"}}`)
+	a, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Validated || a.Result.Overall != "match" {
+		t.Fatalf("%+v", a)
 	}
 }
 

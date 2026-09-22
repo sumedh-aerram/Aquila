@@ -56,6 +56,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunExperiment(ctx, args[1:], os.Stdin, stdout)
 	case "report":
 		return cli.RunReport(ctx, args[1:], stdout)
+	case "runs":
+		return cli.RunRuns(ctx, args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -81,15 +83,17 @@ Commands:
   plan        Minimum useful experiment DAG from impact (does not run it)
   experiment  Plan plus executed replay/latency against two gateways
   report      Markdown from a saved evidence JSON file (does not re-run)
+  runs        List, show, or import persisted experiment evidence
   version     Print the Aquila version
   help        Show this help
 
 Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
   -traces int     observe/impact/plan/experiment trace window (default 20, max 200)
-  -f path         impact/env/plan/experiment: diff file (default stdin)
+  -f path         impact/env/plan/experiment: diff file (default stdin); runs: import evidence JSON
   -shop path      env: shop module (default examples/shop)
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
+  -dir path       experiment: git dir for baseline SHA (default .)
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
@@ -105,8 +109,11 @@ a pass. p95 is withheld unless n>=20. No regression threshold. fault listens on
 loopback only; an injected 502 is a probe, not a pass. plan names env, behavior,
 latency, and (when runtime paths exist) an operator fault. experiment executes
 behavior and latency only; skipped operator steps are not a pass. experiment
--out writes evidence JSON (never validated). report renders that file as
-Markdown without hitting gateways. There is no ask command.
+-out writes evidence JSON (never validated). experiment also POSTs that
+artifact to /v1/runs when the API is up; a missing store is unrecorded, not
+a pass. report renders a file as Markdown without hitting gateways. runs lists
+stored evidence, shows one id, or imports -f. -dir is the repo under change
+(use it from another checkout). There is no ask command.
 `
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/observability"
+	"github.com/sumedhaerram/aquila/internal/runs"
 	"github.com/sumedhaerram/aquila/internal/source"
 	"github.com/sumedhaerram/aquila/internal/storage"
 )
@@ -47,6 +48,7 @@ func main() {
 		Ready:  db,
 		Spans:  ingest.NewPostgres(db.Pool()),
 		Source: src,
+		Runs:   runs.NewPostgres(db.Pool()),
 	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		log.Error("server exited", "err", err)

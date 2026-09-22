@@ -2,6 +2,8 @@ package evidence
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,15 +22,19 @@ const (
 
 // Artifact is the durable record of one local experiment. It is never a pass.
 type Artifact struct {
-	Schema    string        `json:"schema"`
-	Recorded  time.Time     `json:"recorded_at"`
-	Baseline  string        `json:"baseline"`
-	Patch     string        `json:"patch"`
-	Workload  []Request     `json:"workload"`
-	Impact    ImpactSummary `json:"impact"`
-	Plan      plan.DAG      `json:"plan"`
-	Result    plan.Evidence `json:"result"`
-	Validated bool          `json:"validated"`
+	Schema         string        `json:"schema"`
+	Recorded       time.Time     `json:"recorded_at"`
+	Baseline       string        `json:"baseline"`
+	Patch          string        `json:"patch"`
+	BaselineSHA    string        `json:"baseline_sha"`
+	Dirty          bool          `json:"dirty"`
+	WorkloadDigest string        `json:"workload_digest"`
+	ArtifactDigest string        `json:"artifact_digest"`
+	Workload       []Request     `json:"workload"`
+	Impact         ImpactSummary `json:"impact"`
+	Plan           plan.DAG      `json:"plan"`
+	Result         plan.Evidence `json:"result"`
+	Validated      bool          `json:"validated"`
 }
 
 // Request is one workload step without a body.
@@ -51,13 +57,15 @@ type ImpactSummary struct {
 
 // Input is the executed experiment pieces needed to persist evidence.
 type Input struct {
-	Now      time.Time
-	Baseline string
-	Patch    string
-	Workload replay.Workload
-	Impact   impact.Report
-	Plan     plan.DAG
-	Result   plan.Evidence
+	Now         time.Time
+	Baseline    string
+	Patch       string
+	BaselineSHA string
+	Dirty       bool
+	Workload    replay.Workload
+	Impact      impact.Report
+	Plan        plan.DAG
+	Result      plan.Evidence
 }
 
 // Build constructs an artifact. Validated is always false. Bodies are omitted.
@@ -66,17 +74,22 @@ func Build(in Input) Artifact {
 	if now.IsZero() {
 		now = time.Now().UTC().Truncate(time.Second)
 	}
-	return Artifact{
-		Schema:    SchemaV1,
-		Recorded:  now,
-		Baseline:  in.Baseline,
-		Patch:     in.Patch,
-		Workload:  requests(in.Workload),
-		Impact:    summarizeImpact(in.Impact),
-		Plan:      in.Plan,
-		Result:    in.Result,
-		Validated: false,
+	a := Artifact{
+		Schema:      SchemaV1,
+		Recorded:    now,
+		Baseline:    in.Baseline,
+		Patch:       in.Patch,
+		BaselineSHA: in.BaselineSHA,
+		Dirty:       in.Dirty,
+		Workload:    requests(in.Workload),
+		Impact:      summarizeImpact(in.Impact),
+		Plan:        in.Plan,
+		Result:      in.Result,
+		Validated:   false,
 	}
+	a.WorkloadDigest = digestWorkload(a.Workload)
+	a.ArtifactDigest = digestArtifact(a)
+	return a
 }
 
 func requests(w replay.Workload) []Request {
@@ -153,7 +166,6 @@ func Check(a Artifact) error {
 	}
 	switch strings.ToLower(strings.TrimSpace(a.Result.Overall)) {
 	case replay.VerdictMatch, replay.VerdictDiffer, replay.VerdictIncomplete:
-		return nil
 	case "pass", "validated", "ok", "fail", "failed", "success":
 		return fmt.Errorf("evidence: overall %q is not a legal verdict", a.Result.Overall)
 	case "":
@@ -161,6 +173,32 @@ func Check(a Artifact) error {
 	default:
 		return fmt.Errorf("evidence: unknown overall %q", a.Result.Overall)
 	}
+	if a.WorkloadDigest != "" && a.WorkloadDigest != digestWorkload(a.Workload) {
+		return fmt.Errorf("evidence: workload digest mismatch")
+	}
+	if a.ArtifactDigest != "" && a.ArtifactDigest != digestArtifact(a) {
+		return fmt.Errorf("evidence: artifact digest mismatch")
+	}
+	return nil
+}
+
+func digestWorkload(rs []Request) string {
+	h := sha256.New()
+	for _, r := range rs {
+		_, _ = fmt.Fprintf(h, "%s %s %s\n", r.Method, r.Path, r.Provenance)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func digestArtifact(a Artifact) string {
+	cp := a
+	cp.ArtifactDigest = ""
+	raw, err := json.Marshal(cp)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // EqualJSON reports whether two artifacts encode to the same bytes.
