@@ -20,7 +20,7 @@ func TestRunVersion(t *testing.T) {
 
 func TestRunUnknownCommand(t *testing.T) {
 	t.Parallel()
-	err := run([]string{"ask"}, io.Discard, io.Discard)
+	err := run([]string{"agents"}, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -36,7 +36,7 @@ func TestRunHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"observe", "impact", "env", "replay", "fault", "plan", "experiment", "report", "runs"} {
+	for _, want := range []string{"observe", "impact", "env", "replay", "fault", "plan", "experiment", "report", "runs", "ask", "patch", "job", "jobs", "worker"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
@@ -58,6 +58,9 @@ func TestCommandTimeoutFaultIsUnlimited(t *testing.T) {
 	if commandTimeout([]string{"fault", "-target", "http://127.0.0.1:18180"}) != 0 {
 		t.Fatal("fault must not have a process timeout")
 	}
+	if commandTimeout([]string{"worker", "-once"}) != 0 {
+		t.Fatal("worker must not have a process timeout")
+	}
 }
 
 func TestCommandTimeoutReplayScalesWithN(t *testing.T) {
@@ -75,10 +78,20 @@ func TestCommandTimeoutReplayScalesWithN(t *testing.T) {
 
 func TestCommandTimeoutExperimentUsesPlanDefaultN(t *testing.T) {
 	t.Parallel()
-	if got := commandTimeout([]string{"experiment"}); got != 8*time.Minute {
+	if got := commandTimeout([]string{"experiment", "-base", "http://127.0.0.1:18180", "-patch", "http://127.0.0.1:18280"}); got != 8*time.Minute {
 		t.Fatalf("default n=20 must cap, got %s", got)
 	}
-	if got := commandTimeout([]string{"experiment", "-n", "2"}); got != 90*time.Second {
+	if got := commandTimeout([]string{"experiment", "-n", "2", "-base", "http://127.0.0.1:18180", "-patch", "http://127.0.0.1:18280"}); got != 90*time.Second {
 		t.Fatalf("n=2 timeout=%s", got)
+	}
+}
+
+func TestCommandTimeoutExperimentLocalEnvAddsBudget(t *testing.T) {
+	t.Parallel()
+	if got := commandTimeout([]string{"experiment", "-n", "1"}); got != 45*time.Second+localEnvBudget {
+		t.Fatalf("local env n=1 timeout=%s", got)
+	}
+	if got := commandTimeout([]string{"experiment"}); got != 8*time.Minute+localEnvBudget {
+		t.Fatalf("default n=20 local env timeout=%s", got)
 	}
 }

@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval
 
 help:
 	@printf '%s\n' \
@@ -49,6 +49,8 @@ help:
 		'  make plan-eval     Experiment plan, execute, and evidence-report tests (no fake pass)' \
 		'  make runs-eval     Persist experiment runs in the control plane (no fake pass)' \
 		'  make attach-eval   Cwd-native observe/impact and span-derived GET replay' \
+		'  make experiment-smoke  Prepare, start, replay, and tear down a shop pair' \
+		'  make job-eval      Job DAG, worker lease/commit, ask, and patch tests' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -124,7 +126,7 @@ replay-eval:
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunReplay|TestRunFault|TestCommandTimeout|TestRunHelp'
 
 plan-eval:
-	$(GO) test -race -count=1 ./internal/plan ./internal/evidence
+	$(GO) test -race -count=1 ./internal/pair ./internal/plan ./internal/evidence
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunPlan|TestRunExperiment|TestRunReport|TestCommandTimeout|TestRunHelp'
 
 runs-eval:
@@ -136,6 +138,15 @@ attach-eval:
 	$(GO) test -race -count=1 ./internal/replay -run 'TestFromSpans|TestShopFixture|TestReadFile'
 	$(GO) test -race -count=1 ./internal/api -run 'TestListSpans'
 	$(GO) test -race -count=1 ./internal/cli -run 'TestRunImpact|TestLoadTarget|TestReportFromLocal|TestRunReplay|TestRunObserve'
+
+experiment-smoke:
+	@mkdir -p out
+	$(GO) run ./cmd/aquila experiment -fixture -n 1 -f internal/pair/testdata/d1.diff -out out/evidence.json
+
+job-eval:
+	$(GO) test -race -count=1 ./internal/investigate ./internal/rewrite ./internal/jobs ./internal/worker
+	$(GO) test -race -count=1 ./internal/api -run 'TestCreateJob'
+	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunAsk|TestRunPatch|TestRunJob|TestRunHelp|TestCommandTimeout'
 
 fmt:
 	$(GO) fmt ./...

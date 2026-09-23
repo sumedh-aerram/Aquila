@@ -58,6 +58,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunReport(ctx, args[1:], stdout)
 	case "runs":
 		return cli.RunRuns(ctx, args[1:], stdout)
+	case "ask":
+		return cli.RunAsk(ctx, args[1:], os.Stdin, stdout, stderr)
+	case "patch":
+		return cli.RunPatch(ctx, args[1:], os.Stdin, stdout)
+	case "job":
+		return cli.RunJob(ctx, args[1:], os.Stdin, stdout)
+	case "jobs":
+		return cli.RunJobs(ctx, args[1:], stdout)
+	case "worker":
+		return cli.RunWorker(ctx, args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -81,9 +91,14 @@ Commands:
   replay      Same workload against two gateways; match/differ/incomplete
   fault       Loopback reverse proxy that delays or injects a status
   plan        Minimum useful experiment DAG from impact (does not run it)
-  experiment  Plan plus executed replay/latency against two gateways
+  experiment  Plan plus executed replay/latency; starts a shop pair if no -base/-patch
   report      Markdown from a saved evidence JSON file (does not re-run)
   runs        List, show, or import persisted experiment evidence
+  ask         Observed facts matching a question (not a patch, not validated)
+  patch       Candidate D1 rewrite from impact (does not apply)
+  job         Enqueue a plan as a durable DAG for a worker (does not start compose)
+  jobs        List or show persisted jobs
+  worker      Single gRPC worker: lease one executable task and commit
   version     Print the Aquila version
   help        Show this help
 
@@ -91,8 +106,9 @@ Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
   -traces int     observe/impact/plan/experiment/replay trace window (default 20, max 200)
   -f path         impact/env/plan/experiment: diff file (default stdin); runs: import evidence JSON
-  -shop path      env: shop module (default examples/shop)
+  -shop path      env/experiment: shop module (default examples/shop)
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
+  -pair path      experiment: pair parent when omitting -base/-patch (default out/env)
   -dir path       observe/impact/plan/experiment: module (and git tree) under change (default .)
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
@@ -113,12 +129,20 @@ spans (no bodies). -workload is an operator JSON file for POST and friends.
 not a pass. p95 is withheld unless n>=20. No regression threshold. fault
 listens on loopback only; an injected 502 is a probe, not a pass. plan names
 env, behavior, latency, and (when runtime paths exist) an operator fault.
-experiment executes behavior and latency only; skipped operator steps are not
-a pass. experiment -out writes evidence JSON (never validated). experiment
+experiment executes behavior and latency; skipped operator steps are not
+a pass. omitting -base and -patch prepares the shop pair, starts compose on
+the host, waits for /healthz, then tears it down. that path does not boot a
+foreign repo and does not mount the docker socket into shop containers.
+-base/-patch remain required together for another checkout. experiment -out
+writes evidence JSON (never validated). experiment
 also POSTs that artifact to /v1/runs when the API is up; a missing store is
 unrecorded, not a pass. report renders a file as Markdown without hitting
-gateways. runs lists stored evidence, shows one id, or imports -f. There is
-no ask command.
+gateways. runs lists stored evidence, shows one id, or imports -f. ask cites
+observed hops, binds, and optional impact tokens only. patch emits a D1
+candidate for examples/shop and does not write the tree. job records env as
+skipped operator and leaves behavior/latency READY for a worker. worker
+leases one READY task over gRPC, runs replay, and commits with an attempt id.
+a stale attempt cannot commit. There is no LLM and no validated patch.
 `
 }
 
@@ -126,6 +150,8 @@ const (
 	defaultCommandTimeout = 15 * time.Second
 	replayStepBudget      = 45 * time.Second
 	maxReplayTimeout      = 8 * time.Minute
+	localEnvBudget        = 15 * time.Minute
+	maxLocalTimeout       = 25 * time.Minute
 )
 
 func commandTimeout(args []string) time.Duration {
@@ -135,12 +161,21 @@ func commandTimeout(args []string) time.Duration {
 	switch args[0] {
 	case "fault":
 		return 0
+	case "worker":
+		return 0
 	case "replay":
 		n := flagN(args[1:], 1)
 		return capReplayTimeout(n)
 	case "experiment":
 		n := flagN(args[1:], 20)
-		return capReplayTimeout(n)
+		d := capReplayTimeout(n)
+		if !hasFlag(args[1:], "-base") && !hasFlag(args[1:], "-patch") {
+			d += localEnvBudget
+			if d > maxLocalTimeout {
+				return maxLocalTimeout
+			}
+		}
+		return d
 	default:
 		return defaultCommandTimeout
 	}
@@ -178,4 +213,13 @@ func flagN(args []string, def int) int {
 		n = 100
 	}
 	return n
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name || strings.HasPrefix(a, name+"=") {
+			return true
+		}
+	}
+	return false
 }

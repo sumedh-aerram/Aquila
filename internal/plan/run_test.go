@@ -37,6 +37,30 @@ func TestExecuteMatchIsNotPass(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalEnvIsPreparedNotPass(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"status": "ok"})
+	}))
+	t.Cleanup(srv.Close)
+	dag := mustDAG(t, impact.Report{Files: []string{"a.go"}, Direct: []impact.Finding{{Name: "F"}}})
+	dag = WithLocalEnv(WithLatencyN(dag, 1))
+	w := replay.Workload{Steps: []replay.Step{{Method: http.MethodGet, Path: "/healthz"}}}
+	ev, err := Execute(t.Context(), dag, srv.URL, srv.URL, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Overall != replay.VerdictMatch {
+		t.Fatalf("%+v", ev)
+	}
+	if stepVerdict(ev, KindEnv) != VerdictPrepared {
+		t.Fatalf("env: %+v", ev)
+	}
+	if ev.Overall == "pass" || ev.Overall == "validated" {
+		t.Fatal("must not report pass")
+	}
+}
+
 func TestExecuteJSONDifference(t *testing.T) {
 	t.Parallel()
 	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

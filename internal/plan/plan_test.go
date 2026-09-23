@@ -85,6 +85,25 @@ func TestWithLatencyN(t *testing.T) {
 	}
 }
 
+func TestWithLocalEnv(t *testing.T) {
+	t.Parallel()
+	dag, err := FromImpact(impact.Report{Files: []string{"a.go"}, Direct: []impact.Finding{{Name: "F"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := WithLocalEnv(dag)
+	for _, s := range got.Steps {
+		if s.Kind == KindEnv && s.Operator {
+			t.Fatal("local env must not stay operator")
+		}
+	}
+	for _, s := range dag.Steps {
+		if s.Kind == KindEnv && !s.Operator {
+			t.Fatal("WithLocalEnv must not mutate the original")
+		}
+	}
+}
+
 func hasKind(dag DAG, kind string) bool {
 	for _, s := range dag.Steps {
 		if s.Kind == kind {

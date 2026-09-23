@@ -1,0 +1,67 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/sumedhaerram/aquila/internal/jobs"
+	"github.com/sumedhaerram/aquila/internal/worker"
+)
+
+// RunWorker leases executable tasks over gRPC and commits results.
+func RunWorker(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("worker", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addr := fs.String("grpc", envWorker(), "worker gRPC address")
+	id := fs.String("id", "aquila-worker", "worker id")
+	once := fs.Bool("once", false, "lease at most one task and exit")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("cli: worker: %w", err)
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("cli: worker: unexpected argument %q", fs.Arg(0))
+	}
+	conn, err := worker.Dial(*addr)
+	if err != nil {
+		return fmt.Errorf("cli: worker: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := worker.RemoteOnce(ctx, conn, *id)
+		if errors.Is(err, jobs.ErrNoReady) {
+			if *once {
+				writef(stdout, "worker   idle\n")
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("cli: worker: %w", err)
+		}
+		writef(stdout, "worker   committed  id=%s\n", *id)
+		if *once {
+			return nil
+		}
+	}
+}
+
+func envWorker() string {
+	if v := strings.TrimSpace(os.Getenv("AQUILA_WORKER_URL")); v != "" {
+		return v
+	}
+	return "127.0.0.1:8091"
+}

@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/gitrev"
+	"github.com/sumedhaerram/aquila/internal/pair"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
@@ -78,7 +80,8 @@ func writePlan(w io.Writer, dag plan.DAG) {
 	writef(w, "not validated. this is a plan, not evidence.\n")
 }
 
-// RunExperiment plans from a diff and executes replay/latency against two gateways.
+// RunExperiment plans from a diff and executes replay/latency. When -base and
+// -patch are omitted it prepares and starts a shop pair, then tears it down.
 func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := flag.NewFlagSet("experiment", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -92,11 +95,17 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
 	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	shop := fs.String("shop", defaultShop(), "shop module when starting a local pair")
+	pairDir := fs.String("pair", filepath.Join("out", "env"), "parent directory for a local pair")
+	basePort := fs.Int("base-port", 0, "baseline gateway host port (default 18180)")
+	patchPort := fs.Int("patch-port", 0, "patch gateway host port (default 18280)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	if *base == "" || *patch == "" {
-		return fmt.Errorf("cli: experiment: -base and -patch are required")
+	hasBase := *base != ""
+	hasPatch := *patch != ""
+	if hasBase != hasPatch {
+		return fmt.Errorf("cli: experiment: -base and -patch are required together; omit both to start a shop pair")
 	}
 	path, err := diffPath(*file, fs.Args())
 	if err != nil {
@@ -126,7 +135,38 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		return fmt.Errorf("cli: experiment: empty workload (no GET/HEAD/OPTIONS server routes in the trace window; pass -workload for mutating requests)")
 	}
 
-	ev, err := plan.Execute(ctx, dag, *base, *patch, w)
+	baseURL, patchURL := *base, *patch
+	if !hasBase {
+		env, err := preparePair(ctx, pair.PrepareOpts{
+			ShopDir:   *shop,
+			Parent:    *pairDir,
+			Diff:      raw,
+			BasePort:  *basePort,
+			PatchPort: *patchPort,
+			Replace:   true,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := stopPair(context.WithoutCancel(ctx), env); err != nil {
+				writef(stdout, "env       down failed: %v\n", err)
+				return
+			}
+			writef(stdout, "env       stopped\n")
+		}()
+		if err := startPair(ctx, env); err != nil {
+			return err
+		}
+		baseURL = gatewayURL(env.Baseline.Gateway)
+		patchURL = gatewayURL(env.Patch.Gateway)
+		dag = plan.WithLocalEnv(dag)
+		writef(stdout, "env       id=%s  status=up\n", env.ID)
+		writef(stdout, "baseline  %s\n", baseURL)
+		writef(stdout, "patch     %s\n", patchURL)
+	}
+
+	ev, err := plan.Execute(ctx, dag, baseURL, patchURL, w)
 	if err != nil {
 		return err
 	}
@@ -136,8 +176,8 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 	art := evidence.Build(evidence.Input{
 		Now:         time.Now().UTC(),
-		Baseline:    *base,
-		Patch:       *patch,
+		Baseline:    baseURL,
+		Patch:       patchURL,
 		BaselineSHA: sha,
 		Dirty:       dirty,
 		Workload:    w,
@@ -209,4 +249,18 @@ func writeEvidenceFile(path string, a evidence.Artifact) error {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
 	return nil
+}
+
+var (
+	pairHookMu  sync.Mutex
+	preparePair = pair.Prepare
+	startPair   = pair.Up
+	stopPair    = pair.Down
+)
+
+func gatewayURL(gateway string) string {
+	if strings.HasPrefix(gateway, "http://") || strings.HasPrefix(gateway, "https://") {
+		return gateway
+	}
+	return "http://" + gateway
 }

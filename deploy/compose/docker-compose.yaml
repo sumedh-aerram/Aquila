@@ -93,6 +93,7 @@ services:
       AQUILA_LOG_LEVEL: info
       AQUILA_LOG_FORMAT: json
       AQUILA_SERVER_ADDR: ":8080"
+      AQUILA_WORKER_ADDR: ":8091"
       AQUILA_INGEST_TOKEN: aquila-local-ingest
       AQUILA_SOURCE_SNAPSHOT: /etc/aquila/source.json
     volumes:
@@ -104,6 +105,7 @@ services:
       - no-new-privileges:true
     ports:
       - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8091:8091"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 5s

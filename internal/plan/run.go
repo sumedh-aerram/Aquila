@@ -23,8 +23,9 @@ type StepResult struct {
 }
 
 // Execute runs executable DAG steps against base and patch. Operator steps
-// are skipped. It does not start Compose and does not inject one-sided 502
-// as a patch verdict.
+// are skipped. Env marked by WithLocalEnv is recorded as prepared, not a pass.
+// Execute does not start Compose and does not inject one-sided 502 as a patch
+// verdict.
 func Execute(ctx context.Context, dag DAG, base, patch string, w replay.Workload) (Evidence, error) {
 	ev := Evidence{Notes: append([]string(nil), dag.Notes...)}
 	n, needReplay := replayRepeats(dag)
@@ -49,6 +50,11 @@ func Execute(ctx context.Context, dag DAG, base, patch string, w replay.Workload
 
 func evalStep(s Step, base, patch []replay.Result) StepResult {
 	out := StepResult{ID: s.ID, Kind: s.Kind}
+	if s.Kind == KindEnv && !s.Operator {
+		out.Verdict = VerdictPrepared
+		out.Notes = []string{"compose"}
+		return out
+	}
 	if s.Operator {
 		out.Verdict = VerdictSkipped
 		out.Notes = []string{"operator"}
@@ -101,6 +107,9 @@ func overall(steps []StepResult) string {
 	executed := 0
 	for _, s := range steps {
 		if s.Verdict == VerdictSkipped {
+			continue
+		}
+		if s.Kind == KindEnv {
 			continue
 		}
 		executed++

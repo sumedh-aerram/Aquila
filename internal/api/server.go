@@ -8,9 +8,11 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/ingest"
+	"github.com/sumedhaerram/aquila/internal/jobs"
 	"github.com/sumedhaerram/aquila/internal/runs"
 	"github.com/sumedhaerram/aquila/internal/source"
 	"github.com/sumedhaerram/aquila/internal/version"
+	"github.com/sumedhaerram/aquila/internal/worker"
 )
 
 // Dependencies are optional control-plane backends. A nil field disables that surface.
@@ -19,6 +21,7 @@ type Dependencies struct {
 	Spans  ingest.Store
 	Source *source.Graph
 	Runs   runs.Store
+	Jobs   jobs.Store
 }
 
 // Server is the control-plane HTTP surface.
@@ -29,6 +32,7 @@ type Server struct {
 	spans    ingest.Store
 	src      *source.Graph
 	runStore runs.Store
+	jobs     jobs.Store
 	http     *http.Server
 }
 
@@ -37,7 +41,7 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source, runStore: deps.Runs}
+	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source, runStore: deps.Runs, jobs: deps.Jobs}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
@@ -52,6 +56,9 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	mux.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	mux.HandleFunc("GET /v1/runs", s.handleListRuns)
 	mux.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
+	mux.HandleFunc("POST /v1/jobs", s.handleCreateJob)
+	mux.HandleFunc("GET /v1/jobs", s.handleListJobs)
+	mux.HandleFunc("GET /v1/jobs/{id}", s.handleGetJob)
 
 	readTimeout := cfg.Server.ReadTimeout
 	if readTimeout <= 0 {
@@ -91,6 +98,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.log.Info("listening", "addr", s.cfg.Server.Addr, "version", version.Version)
 		errCh <- s.http.ListenAndServe()
 	}()
+	if s.jobs != nil && s.cfg.Worker.Addr != "" {
+		go func() {
+			s.log.Info("worker grpc", "addr", s.cfg.Worker.Addr)
+			if err := worker.ListenAndServe(ctx, s.cfg.Worker.Addr, s.jobs); err != nil {
+				s.log.Error("worker grpc", "err", err)
+			}
+		}()
+	}
 
 	select {
 	case <-ctx.Done():

@@ -21,6 +21,7 @@ const (
 	DefaultReadTimeout      = 15 * time.Second
 	DefaultWriteTimeout     = 30 * time.Second
 	DefaultIdleTimeout      = 60 * time.Second
+	DefaultWorkerAddr       = "127.0.0.1:8091"
 )
 
 // Config is Aquila control-plane configuration.
@@ -30,6 +31,7 @@ type Config struct {
 	Postgres PostgresConfig `yaml:"postgres"`
 	Ingest   IngestConfig   `yaml:"ingest"`
 	Source   SourceConfig   `yaml:"source"`
+	Worker   WorkerConfig   `yaml:"worker"`
 }
 
 type ServerConfig struct {
@@ -54,6 +56,11 @@ type IngestConfig struct {
 type SourceConfig struct {
 	Dir      string `yaml:"dir"`
 	Snapshot string `yaml:"snapshot"`
+}
+
+// WorkerConfig is the gRPC listen address for a single worker.
+type WorkerConfig struct {
+	Addr string `yaml:"addr"`
 }
 
 type PostgresConfig struct {
@@ -104,6 +111,7 @@ func defaults() Config {
 			MaxConns:       DefaultPostgresMaxConns,
 			ConnectTimeout: DefaultConnectTimeout,
 		},
+		Worker: WorkerConfig{Addr: DefaultWorkerAddr},
 	}
 }
 
@@ -144,6 +152,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("AQUILA_SOURCE_SNAPSHOT"); v != "" {
 		cfg.Source.Snapshot = v
 	}
+	if v := os.Getenv("AQUILA_WORKER_ADDR"); v != "" {
+		cfg.Worker.Addr = v
+	}
 }
 
 // Validate checks required fields and enumerations.
@@ -181,6 +192,9 @@ func (c Config) Validate() error {
 	}
 	if c.Postgres.ConnectTimeout <= 0 {
 		return fmt.Errorf("postgres.connect_timeout must be positive")
+	}
+	if strings.TrimSpace(c.Worker.Addr) == "" {
+		return fmt.Errorf("worker.addr is required")
 	}
 	return nil
 }

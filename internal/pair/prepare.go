@@ -55,6 +55,7 @@ type PrepareOpts struct {
 	Diff      []byte
 	BasePort  int
 	PatchPort int
+	Replace   bool
 }
 
 // Prepare copies the shop twice, applies the diff only to patch, and writes
@@ -97,7 +98,12 @@ func Prepare(ctx context.Context, opts PrepareOpts) (Env, error) {
 	id := sha256Hex([]byte(baseDigest + ":" + patchDigest))[:12]
 	root := filepath.Join(parent, id)
 	if _, err := os.Stat(root); err == nil {
-		return Env{}, fmt.Errorf("pair: %s exists", id)
+		if !opts.Replace {
+			return Env{}, fmt.Errorf("pair: %s exists", id)
+		}
+		if err := replaceRoot(ctx, root); err != nil {
+			return Env{}, err
+		}
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return Env{}, fmt.Errorf("pair: %w", err)

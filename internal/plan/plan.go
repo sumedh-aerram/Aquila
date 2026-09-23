@@ -17,8 +17,9 @@ const (
 )
 
 const (
-	VerdictSkipped = "skipped"
-	VerdictSamples = "samples"
+	VerdictSkipped  = "skipped"
+	VerdictSamples  = "samples"
+	VerdictPrepared = "prepared"
 )
 
 // Step is one node in the minimum useful experiment DAG.
@@ -101,6 +102,20 @@ func WithLatencyN(dag DAG, n int) DAG {
 		if steps[i].Kind == KindLatency {
 			steps[i].N = n
 		}
+	}
+	dag.Steps = steps
+	return dag
+}
+
+// WithLocalEnv marks the env step as executed by Aquila (shop pair only).
+func WithLocalEnv(dag DAG) DAG {
+	steps := append([]Step(nil), dag.Steps...)
+	for i := range steps {
+		if steps[i].Kind != KindEnv {
+			continue
+		}
+		steps[i].Operator = false
+		steps[i].Reason = "isolated shop pair started by aquila; traces stay out of the live store"
 	}
 	dag.Steps = steps
 	return dag

@@ -20,6 +20,7 @@ func clearConfigEnv(t *testing.T) {
 		"AQUILA_INGEST_TOKEN",
 		"AQUILA_SOURCE_DIR",
 		"AQUILA_SOURCE_SNAPSHOT",
+		"AQUILA_WORKER_ADDR",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
@@ -37,6 +38,9 @@ func TestLoadFromDefaults(t *testing.T) {
 	}
 	if cfg.Log.Format != DefaultLogFormat {
 		t.Fatalf("format = %q, want %q", cfg.Log.Format, DefaultLogFormat)
+	}
+	if cfg.Worker.Addr != DefaultWorkerAddr {
+		t.Fatalf("worker = %q, want %q", cfg.Worker.Addr, DefaultWorkerAddr)
 	}
 }
 

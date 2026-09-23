@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/locate"
+	"github.com/sumedhaerram/aquila/internal/pair"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 	"github.com/sumedhaerram/aquila/internal/runs"
@@ -636,11 +639,113 @@ func TestRunExperimentIncompleteWhenPatchDown(t *testing.T) {
 	}
 }
 
-func TestRunExperimentRequiresTargets(t *testing.T) {
+func TestRunExperimentRequiresTargetsTogether(t *testing.T) {
 	t.Parallel()
-	err := RunExperiment(t.Context(), []string{"-fixture"}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	err := RunExperiment(t.Context(), []string{"-fixture", "-base", "http://127.0.0.1:18180"}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "together") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunExperimentLocalShopMissing(t *testing.T) {
+	pairHookMu.Lock()
+	defer pairHookMu.Unlock()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"a.go"},
+		Direct: []impact.Finding{{Name: "F"}},
+	})
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-fixture", "-n", "1", "-shop", t.TempDir(), "-dir", t.TempDir(),
+	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRunExperimentLocalEnvPrepared(t *testing.T) {
+	pairHookMu.Lock()
+	defer pairHookMu.Unlock()
+	origP, origU, origD := preparePair, startPair, stopPair
+	t.Cleanup(func() {
+		preparePair, startPair, stopPair = origP, origU, origD
+	})
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"internal/payment/handler.go"},
+		Direct: []impact.Finding{{Name: "chargeProcessor"}},
+	})
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	t.Cleanup(gw.Close)
+	u, err := url.Parse(gw.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stopped atomic.Bool
+	preparePair = func(context.Context, pair.PrepareOpts) (pair.Env, error) {
+		return pair.Env{
+			ID:       "aaaaaaaaaaaa",
+			Baseline: pair.Side{Gateway: u.Host},
+			Patch:    pair.Side{Gateway: u.Host},
+		}, nil
+	}
+	startPair = func(context.Context, pair.Env) error { return nil }
+	stopPair = func(context.Context, pair.Env) error {
+		stopped.Store(true)
+		return nil
+	}
+	var out strings.Builder
+	err = RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "status=up") || !strings.Contains(got, "prepared") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "overall=match") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "overall=pass") || strings.Contains(got, "verdict=pass") {
+		t.Fatalf("%s", got)
+	}
+	if !stopped.Load() {
+		t.Fatal("must tear down")
+	}
+}
+
+func TestRunExperimentLocalEnvTearsDownOnStartFailure(t *testing.T) {
+	pairHookMu.Lock()
+	defer pairHookMu.Unlock()
+	origP, origU, origD := preparePair, startPair, stopPair
+	t.Cleanup(func() {
+		preparePair, startPair, stopPair = origP, origU, origD
+	})
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"a.go"},
+		Direct: []impact.Finding{{Name: "F"}},
+	})
+	var stopped atomic.Bool
+	preparePair = func(context.Context, pair.PrepareOpts) (pair.Env, error) {
+		return pair.Env{ID: "aaaaaaaaaaaa"}, nil
+	}
+	startPair = func(context.Context, pair.Env) error {
+		return errors.New("compose failed")
+	}
+	stopPair = func(context.Context, pair.Env) error {
+		stopped.Store(true)
+		return nil
+	}
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil {
+		t.Fatal("expected start failure")
+	}
+	if !stopped.Load() {
+		t.Fatal("must tear down after failed up")
 	}
 }
 
@@ -814,6 +919,83 @@ func TestRunRunsImportAndGet(t *testing.T) {
 	}
 	if !strings.Contains(getOut.String(), "overall=differ") || strings.Contains(getOut.String(), "overall=pass") {
 		t.Fatalf("%s", getOut.String())
+	}
+}
+
+func TestRunAskHitsCheckout(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{
+				Services: []graph.Service{{Name: "checkout"}, {Name: "payment"}},
+				Edges:    []graph.Edge{{From: "checkout", To: "payment", Provenance: graph.ProvenanceObservedParent}},
+				Paths:    []graph.Path{{Services: []string{"checkout", "payment"}, Provenance: graph.ProvenanceObservedParent}},
+			})
+		case "/v1/source":
+			writeTestJSON(w, source.Snapshot{Module: "example.com/shop"})
+		case "/v1/locate":
+			writeTestJSON(w, locate.Snapshot{
+				Bindings: []locate.Binding{{ServiceName: "payment", SourceName: "authorize", File: "internal/payment/handler.go"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errBuf strings.Builder
+	err := RunAsk(t.Context(), []string{"-api", srv.URL, "why", "is", "checkout", "slow"}, strings.NewReader(""), &out, &errBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "checkout") || !strings.Contains(got, "facts only") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "overall=pass") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunAskRequiresQuestion(t *testing.T) {
+	t.Parallel()
+	err := RunAsk(t.Context(), nil, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRunPatchWritesCandidate(t *testing.T) {
+	t.Parallel()
+	shop := filepath.Clean(filepath.Join("..", "..", "examples", "shop"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/spans" {
+			writeTestJSON(w, map[string]any{"spans": []any{}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	raw, err := os.ReadFile(filepath.Join("..", "pair", "testdata", "d1.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	err = RunPatch(t.Context(), []string{"-api", srv.URL, "-dir", shop}, bytes.NewReader(raw), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "svcclient.Shared()") || !strings.Contains(got, "not applied") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunJobRequiresGateways(t *testing.T) {
+	t.Parallel()
+	err := RunJob(t.Context(), []string{"-fixture"}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 
