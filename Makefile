@@ -24,15 +24,15 @@ GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 SHOP_GW     := http://127.0.0.1:18080
 
-.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke
+.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke executor executor-test
 
 help:
 	@printf '%s\n' \
 		'Aquila developer targets' \
 		'' \
 		'  make cli       Rebuild ./bin/aquila (seconds; use this while iterating)' \
-		'  make build     Build aquila, aquila-server, and sourceindex into ./bin' \
-		'  make test      go test -race ./... including examples/shop' \
+		'  make build     Build aquila, aquila-server, sourceindex, and aquila-exec into ./bin' \
+		'  make test      go test -race ./..., shop tests, and aquila-exec tests' \
 		'  make shop-test race tests for the demo shop module' \
 		'  make lint      golangci-lint (control plane + shop)' \
 		'  make fmt       go fmt ./...' \
@@ -58,6 +58,8 @@ help:
 		'  make experiment-smoke  Prepare, start, replay, and tear down a shop pair' \
 		'  make job-eval      Job DAG, worker lease/commit, ask, and patch tests' \
 		'  make job-smoke     Enqueue a fixture job against the live shop and lease it' \
+		'  make executor      Build C++ aquila-exec into ./bin' \
+		'  make executor-test Native supervisor tests (rlimits, timeout; net ns is Linux)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -66,14 +68,23 @@ cli:
 	@mkdir -p '$(GOBIN)'
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o '$(AQUILA)' ./cmd/aquila
 
-build: cli
+build: cli executor
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o '$(GOBIN)/aquila-server' ./cmd/server
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o '$(GOBIN)/sourceindex' ./cmd/sourceindex
+
+executor:
+	$(MAKE) -C executor
+	@mkdir -p '$(GOBIN)'
+	cp executor/aquila-exec '$(GOBIN)/aquila-exec'
+
+executor-test:
+	$(MAKE) -C executor test
 
 test:
 	$(GO) -C examples/shop mod download
 	$(GO) test -race -count=1 ./...
 	$(MAKE) shop-test
+	$(MAKE) executor-test
 
 shop-test:
 	$(GO) -C examples/shop test -race -count=1 ./...
@@ -167,7 +178,7 @@ experiment-smoke: cli
 	'$(AQUILA)' experiment -fixture -n 1 -f internal/pair/testdata/d1.diff -out out/evidence.json
 
 job-eval:
-	$(GO) test -race -count=1 ./internal/investigate ./internal/rewrite ./internal/jobs ./internal/worker ./internal/cas ./internal/action ./internal/sandbox
+	$(GO) test -race -count=1 ./internal/investigate ./internal/rewrite ./internal/jobs ./internal/worker ./internal/cas ./internal/action ./internal/sandbox ./internal/nexec
 	$(GO) test -race -count=1 ./internal/api -run 'TestCreateJob'
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunAsk|TestRunPatch|TestRunJob|TestRunHelp|TestCommandTimeout'
 

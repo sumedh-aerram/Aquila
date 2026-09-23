@@ -481,3 +481,40 @@ func TestRunAskHitsHealthRoute(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+func TestAllowsShopPair(t *testing.T) {
+	t.Parallel()
+	if allowsShopPair(t.TempDir(), t.TempDir()) {
+		t.Fatal("foreign python-style dir must not start shop compose")
+	}
+	dir := writeModule(t, controlPlaneModule, "package p\nfunc F() {}\n")
+	if !allowsShopPair(dir, "") {
+		t.Fatal("control-plane dir should allow shop pair")
+	}
+	root := moduleRoot(t)
+	shop := filepath.Join(root, "examples", "shop")
+	if !allowsShopPair(shop, "") {
+		t.Fatal("examples/shop")
+	}
+	if allowsShopPair(t.TempDir(), shop) {
+		t.Fatal("-shop must not license a foreign -dir")
+	}
+}
+
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = parent
+	}
+}

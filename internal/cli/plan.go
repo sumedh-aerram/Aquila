@@ -108,6 +108,12 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if hasBase != hasPatch {
 		return fmt.Errorf("cli: experiment: -base and -patch are required together; omit both to start a shop pair")
 	}
+	if *fixture && !allowsShopPair(*dir, *shop) {
+		return fmt.Errorf("cli: experiment: -fixture is shop checkout smoke; pass -workload for another app")
+	}
+	if !hasBase && !allowsShopPair(*dir, *shop) {
+		return fmt.Errorf("cli: experiment: -base and -patch are required; omitting them only starts the shop pair")
+	}
 	path, err := diffPath(*file, fs.Args())
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)

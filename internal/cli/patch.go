@@ -27,7 +27,7 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	if err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}
-	raw, err := slurpDiff(stdin, path)
+	raw, _, err := resolveDiff(ctx, stdin, path, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}

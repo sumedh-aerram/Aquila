@@ -113,7 +113,7 @@ curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
 
 Shop services export OTLP/gRPC to the collector. The collector forwards OTLP/HTTP to Aquila so checkout never waits on the control plane. Runtime topology is computed from a window of complete traces, in process. The source graph is loaded from a live module directory (`AQUILA_SOURCE_DIR`) or from a JSON snapshot (`AQUILA_SOURCE_SNAPSHOT`) so the API image does not ship a Go toolchain.
 
-Experiments are **jobs** with identity: git SHA, dirty worktree, workload digest, artifact digest. `aquila experiment` still writes `aquila.runs`. `aquila job` writes a DAG in `aquila.jobs`. `aquila worker -once` leases one READY task over loopback gRPC (`-slots` caps concurrent leases, default 1). The worker heartbeats while executing; a 15s lease without a heartbeat is requeued. A stale attempt cannot commit. `AQUILA_CAS_DIR` is a local SHA-256 object store plus an action cache so an identical replay can skip a second hit. Untrusted commands run in `docker run` with `--network none`, `--cap-drop ALL`, and no Docker socket; HTTP replay to operator gateways still runs on the host. Duplicate POSTs of the same run digest are idempotent. `validated` cannot be true. Killing the API does not drop stored jobs.
+Experiments are **jobs** with identity: git SHA, dirty worktree, workload digest, artifact digest. `aquila experiment` still writes `aquila.runs`. `aquila job` writes a DAG in `aquila.jobs`. `aquila worker -once` leases one READY task over loopback gRPC (`-slots` caps concurrent leases, default 1). The worker heartbeats while executing; a 15s lease without a heartbeat is requeued. A stale attempt cannot commit. `AQUILA_CAS_DIR` is a local SHA-256 object store plus an action cache so an identical replay can skip a second hit. Untrusted commands run in `docker run` with `--network none`, `--cap-drop ALL`, and no Docker socket. `aquila-exec` (`make executor`) is a C++20 supervisor with rlimits and a hard timeout; `--net none` is Linux-only and fails closed on macOS. HTTP replay to operator gateways still runs on the host. Duplicate POSTs of the same run digest are idempotent. `validated` cannot be true. Killing the API does not drop stored jobs.
 
 Ingest privacy and sandbox bounds: [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -136,7 +136,7 @@ aquila report /tmp/evidence.json
 
 `observe` prints `origin=cwd` for a Go module, `origin=none` when there is no `go.mod` (Python and friends), and `origin=api` only when you are standing in the Aquila control-plane repo so shop diffs still map. It will not pretend a foreign app is `examples/shop`. `impact` without a piped diff reads **your** uncommitted changes. Typed callers (`direct` / `likely`) need a Go module. Otherwise findings are file-level: changed paths, unobserved until spans set `code.file.path`. Runtime joins only on that attribute — not on filename or route guesses. `ask` matches hops, **routes**, binds, and local impact tokens.
 
-Do not bind the app under test to `:8080` (that is Aquila). ReRoute’s README uses 8080; pick another port. Omit `-base`/`-patch` and `experiment` prepares shop Compose only. Do not pass `-fixture` (shop checkout smoke). POST needs `-workload` you wrote.
+Do not bind the app under test to `:8080` (that is Aquila). ReRoute’s README uses 8080; pick another port. Omitting `-base`/`-patch` starts shop Compose **only** when `-dir` is `examples/shop` or this repository; a foreign checkout errors and asks for two gateway URLs. `-fixture` is shop checkout smoke and is rejected off the shop. POST needs `-workload` you wrote.
 
 The shop is the reference system and the only Compose env Aquila can prepare. Health-probe traces (`/healthz` and friends) are omitted from the window. The span store is still shared: hops from shop and from your app can appear together.
 
@@ -152,6 +152,7 @@ Match is not a pass. Stored runs have `validated=false`. `env` and `patch` remai
 | Reference app | `examples/shop/` |
 | Local environment | Docker Compose |
 | Experiment execution | gRPC workers, 1 slot default, heartbeats, fencing |
+| Native supervisor | `aquila-exec` (C++20 rlimits + timeout; Linux `--net none`) |
 | Artifacts | SHA-256 CAS on disk (`AQUILA_CAS_DIR`); runs JSON in Postgres |
 
 ```bash

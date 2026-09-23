@@ -91,7 +91,7 @@ Commands:
   replay      Same workload against two gateways; match/differ/incomplete
   fault       Loopback reverse proxy that delays or injects a status
   plan        Minimum useful experiment DAG from impact (does not run it)
-  experiment  Plan plus executed replay/latency; starts a shop pair if no -base/-patch
+  experiment  Plan plus executed replay/latency; shop pair only on shop/control-plane -dir
   report      Markdown from a saved evidence JSON file (does not re-run)
   runs        List, show, or import persisted experiment evidence
   ask         Observed facts matching a question (not a patch, not validated)
@@ -132,10 +132,10 @@ match is not a pass. p95 is withheld unless n>=20. No regression threshold.
 fault listens on loopback only; an injected 502 is a probe, not a pass. plan
 names env, behavior, latency, and (when runtime paths exist) an operator fault.
 experiment executes behavior and latency; skipped operator steps are not
-a pass. omitting -base and -patch prepares the shop pair, starts compose on
-the host, waits for /healthz, then tears it down. that path does not boot a
-foreign repo and does not mount the docker socket into shop containers.
--base/-patch remain required together for another checkout. experiment -out
+a pass. omitting -base and -patch prepares the shop pair only when -dir is
+the shop or this control-plane repo. a foreign or python checkout must pass
+both gateway URLs; it will not start shop compose. -fixture is shop smoke
+and is rejected off the shop. experiment -out
 writes evidence JSON (never validated). experiment
 also POSTs that artifact to /v1/runs when the API is up; a missing store is
 unrecorded, not a pass. report renders a file as Markdown without hitting

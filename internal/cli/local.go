@@ -70,6 +70,32 @@ func controlPlaneDir(dir string) bool {
 	return readModulePath(root) == controlPlaneModule
 }
 
+func shopTree(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	for _, p := range []string{
+		filepath.Join(abs, "internal", "payment", "handler.go"),
+		filepath.Join(abs, "examples", "shop", "internal", "payment", "handler.go"),
+	} {
+		st, err := os.Stat(p)
+		if err == nil && !st.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// allowsShopPair is true when omitting -base/-patch may start the shop Compose pair.
+// -shop is the copy source and must not license a foreign -dir.
+func allowsShopPair(dir, _ string) bool {
+	return shopTree(dir) || controlPlaneDir(dir)
+}
+
 func findGoMod(dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		dir = "."

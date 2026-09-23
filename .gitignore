@@ -32,11 +32,14 @@ vendor/
 /docs/*
 !/docs/SECURITY.md
 
+# Native supervisor build products (sources in executor/ are tracked)
+executor/aquila-exec
+executor/aquila-exec-test
+
 # Empty phase placeholders
 **/.gitkeep
 /benchmarks/
 /chaos/
-/executor/
 /proto/
 /web/
 /deploy/terraform/

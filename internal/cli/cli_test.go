@@ -652,6 +652,39 @@ func TestRunExperimentIncompleteWhenPatchDown(t *testing.T) {
 	}
 }
 
+func TestRunExperimentForeignDirRequiresGateways(t *testing.T) {
+	t.Parallel()
+	err := RunExperiment(t.Context(), []string{
+		"-n", "1", "-dir", t.TempDir(),
+	}, strings.NewReader(""), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "-base and -patch are required") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunExperimentFixtureRejectedWithDefaultShop(t *testing.T) {
+	t.Parallel()
+	shop := filepath.Join(moduleRoot(t), "examples", "shop")
+	err := RunExperiment(t.Context(), []string{
+		"-fixture", "-n", "1", "-dir", t.TempDir(), "-shop", shop,
+		"-base", "http://127.0.0.1:19280", "-patch", "http://127.0.0.1:19281",
+	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "-fixture is shop") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunExperimentFixtureRejectedOffShop(t *testing.T) {
+	t.Parallel()
+	err := RunExperiment(t.Context(), []string{
+		"-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-base", "http://127.0.0.1:19280", "-patch", "http://127.0.0.1:19281",
+	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "-fixture is shop") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestRunExperimentRequiresTargetsTogether(t *testing.T) {
 	t.Parallel()
 	err := RunExperiment(t.Context(), []string{"-fixture", "-base", "http://127.0.0.1:18180"}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
@@ -772,8 +805,8 @@ func TestRunExperimentWritesEvidenceJSON(t *testing.T) {
 		writeReplayJSON(w, map[string]any{"status": "ok"})
 	}))
 	t.Cleanup(gw.Close)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "evidence.json")
+	dir := shopSnapshotDir(t)
+	path := filepath.Join(t.TempDir(), "evidence.json")
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
 		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-out", path, "-dir", dir,
@@ -818,7 +851,7 @@ func TestRunExperimentWritesIncompleteEvidence(t *testing.T) {
 	down.Close()
 	path := filepath.Join(t.TempDir(), "evidence.json")
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-out", path, "-dir", t.TempDir(),
+		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-out", path, "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("down patch must be incomplete, err=%v", err)
