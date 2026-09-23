@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/sumedhaerram/aquila/internal/impact"
 )
@@ -71,13 +72,30 @@ func writeSection(w io.Writer, title string, fs []impact.Finding) {
 		return
 	}
 	for _, f := range fs {
-		switch {
-		case f.Service != "":
-			writef(w, "  %s  %s  %s  %s\n", f.Service, f.Name, f.Reason, f.Provenance)
-		case f.Path != "":
-			writef(w, "  %s  %s  %s\n", f.Path, f.Reason, f.Provenance)
-		default:
-			writef(w, "  %s  %s  %s  %s\n", f.Name, f.File, f.Reason, f.Provenance)
+		writeFinding(w, f)
+	}
+}
+
+func writeFinding(w io.Writer, f impact.Finding) {
+	loc := f.File
+	if f.Line > 0 && f.File != "" {
+		loc = f.File + ":" + strconv.Itoa(f.Line)
+	}
+	switch {
+	case f.Route != "" && f.Name != "":
+		svc := f.Service
+		if svc == "" {
+			writef(w, "  %s  %s  %s  %s  %s\n", f.Route, f.Name, loc, f.Reason, f.Provenance)
+			return
 		}
+		writef(w, "  %s  %s  %s  %s  %s  %s\n", svc, f.Route, f.Name, loc, f.Reason, f.Provenance)
+	case f.Service != "":
+		writef(w, "  %s  %s  %s  %s\n", f.Service, f.Name, f.Reason, f.Provenance)
+	case f.Path != "":
+		writef(w, "  %s  %s  %s\n", f.Path, f.Reason, f.Provenance)
+	case loc != "":
+		writef(w, "  %s  %s  %s  %s\n", f.Name, loc, f.Reason, f.Provenance)
+	default:
+		writef(w, "  %s  %s  %s  %s\n", f.Name, f.File, f.Reason, f.Provenance)
 	}
 }

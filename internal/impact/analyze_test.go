@@ -29,6 +29,9 @@ func TestAnalyzeDirectAndCaller(t *testing.T) {
 	if !hasFinding(rep.Direct, "chargeProcessor") {
 		t.Fatalf("direct=%+v", rep.Direct)
 	}
+	if rep.Direct[0].Line < 1 {
+		t.Fatalf("direct line=%+v", rep.Direct)
+	}
 	if !hasFinding(rep.Likely, "authorize") {
 		t.Fatalf("likely=%+v", rep.Likely)
 	}
@@ -55,6 +58,8 @@ func TestAnalyzeRuntimePathFromLocate(t *testing.T) {
 		SourceName:  "authorize",
 		ServiceName: "payment",
 		File:        "internal/payment/handler.go",
+		HTTPMethod:  "POST",
+		HTTPRoute:   "/authorize",
 		Provenance:  locate.ProvenanceCodeAttrs,
 	}}}
 	rt := graph.Snapshot{Paths: []graph.Path{{
@@ -66,13 +71,16 @@ func TestAnalyzeRuntimePathFromLocate(t *testing.T) {
 	if !hasFinding(rep.Direct, "authorize") {
 		t.Fatalf("direct=%+v", rep.Direct)
 	}
-	foundPath := false
+	foundRoute, foundPath := false, false
 	for _, f := range rep.Runtime {
+		if f.Route == "POST /authorize" && f.Reason == "bound_span" {
+			foundRoute = true
+		}
 		if strings.Contains(f.Path, "checkout -> payment") {
 			foundPath = true
 		}
 	}
-	if !foundPath {
+	if !foundRoute || !foundPath {
 		t.Fatalf("runtime=%+v", rep.Runtime)
 	}
 }

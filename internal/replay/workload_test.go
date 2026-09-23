@@ -108,6 +108,29 @@ func TestFromSpansCapsAtMaxSteps(t *testing.T) {
 	}
 }
 
+func TestRestrictToRoutesKeepsOverlap(t *testing.T) {
+	t.Parallel()
+	w := FromSpans([]ingest.Span{
+		{ServiceName: "ledger", Kind: "server", HTTPMethod: "GET", HTTPRoute: "/invoice"},
+		{ServiceName: "ledger", Kind: "server", HTTPMethod: "GET", HTTPRoute: "/healthz"},
+	})
+	got := RestrictToRoutes(w, []string{"GET /invoice"}, ProvenanceChangedLines)
+	if len(got.Steps) != 1 || got.Steps[0].Path != "/invoice" || got.Steps[0].Provenance != ProvenanceChangedLines {
+		t.Fatalf("%+v", got.Steps)
+	}
+}
+
+func TestRestrictToRoutesFallsBackWhenNoOverlap(t *testing.T) {
+	t.Parallel()
+	w := FromSpans([]ingest.Span{
+		{ServiceName: "ledger", Kind: "server", HTTPMethod: "GET", HTTPRoute: "/invoice"},
+	})
+	got := RestrictToRoutes(w, []string{"GET /missing"}, ProvenanceChangedLines)
+	if len(got.Steps) != 1 || got.Steps[0].Path != "/invoice" || got.Steps[0].Provenance != ProvenanceSpanRoute {
+		t.Fatalf("must keep window: %+v", got.Steps)
+	}
+}
+
 func TestShopFixtureHasNoTraceProvenance(t *testing.T) {
 	t.Parallel()
 	w := ShopFixture()

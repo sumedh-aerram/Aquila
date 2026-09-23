@@ -36,7 +36,23 @@ type Input struct {
 func Search(in Input) (Report, error) {
 	q := strings.TrimSpace(in.Question)
 	if q == "" {
-		return Report{}, fmt.Errorf("investigate: empty question")
+		if in.Impact == nil {
+			return Report{}, fmt.Errorf("investigate: empty question")
+		}
+		out := Report{
+			Question: "local edit",
+			Origin:   in.Origin,
+			Hits:     []string{},
+			Notes: []string{
+				"facts only. not a patch. not validated.",
+				"question omitted: citing the local worktree",
+			},
+		}
+		out.Hits = append(out.Hits, impactFacts(*in.Impact)...)
+		if len(out.Hits) == 0 {
+			out.Notes = append(out.Notes, "no local-edit facts")
+		}
+		return out, nil
 	}
 	if len(q) > maxQuestion {
 		return Report{}, fmt.Errorf("investigate: question too large")
@@ -95,20 +111,29 @@ func facts(in Input) []string {
 	if in.Impact == nil {
 		return out
 	}
-	for _, f := range in.Impact.Files {
+	return append(out, impactFacts(*in.Impact)...)
+}
+
+func impactFacts(rep impact.Report) []string {
+	var out []string
+	for _, f := range rep.Files {
 		out = append(out, "file "+f)
 	}
-	for _, f := range in.Impact.Direct {
-		out = append(out, "direct "+strings.TrimSpace(f.Name+" "+f.File))
+	for _, f := range rep.Direct {
+		loc := strings.TrimSpace(f.Name + " " + f.File)
+		if f.Line > 0 {
+			loc += fmt.Sprintf(":%d", f.Line)
+		}
+		out = append(out, "direct "+loc)
 	}
-	for _, f := range in.Impact.Likely {
+	for _, f := range rep.Likely {
 		out = append(out, "likely "+strings.TrimSpace(f.Name+" "+f.File))
 	}
-	for _, f := range in.Impact.Runtime {
-		line := strings.TrimSpace(f.Path + " " + f.Name)
-		out = append(out, "runtime "+line)
+	for _, f := range rep.Runtime {
+		line := strings.TrimSpace(f.Route + " " + f.Path + " " + f.Name)
+		out = append(out, "runtime "+strings.TrimSpace(line))
 	}
-	for _, f := range in.Impact.Unobserved {
+	for _, f := range rep.Unobserved {
 		out = append(out, "unobserved "+strings.TrimSpace(f.Name+" "+f.File))
 	}
 	return out

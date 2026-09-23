@@ -60,6 +60,7 @@ func FromDiff(d diff.Diff, spans []ingest.Span) Report {
 				File:       p,
 				Service:    sp.ServiceName,
 				Path:       strings.TrimSpace(sp.HTTPRoute),
+				Route:      routeLabel(sp.HTTPMethod, sp.HTTPRoute),
 				Reason:     "code_file",
 				Provenance: locate.ProvenanceCodeAttrs,
 			})

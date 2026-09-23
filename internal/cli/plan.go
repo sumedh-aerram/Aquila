@@ -14,6 +14,7 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/gitrev"
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/pair"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -48,8 +49,27 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		return err
 	}
 	writef(stdout, "origin   %s  diff=%s\n", origin, src)
+	writeEditPlan(stdout, rep)
 	writePlan(stdout, dag)
 	return nil
+}
+
+func writeEditPlan(w io.Writer, rep impact.Report) {
+	if len(rep.Direct) == 0 && len(rep.Runtime) == 0 {
+		return
+	}
+	writef(w, "edit\n")
+	n := 0
+	for _, f := range rep.Direct {
+		if n >= 10 {
+			break
+		}
+		writeFinding(w, f)
+		n++
+	}
+	for _, label := range impact.ReplayableRoutes(rep) {
+		writef(w, "  replay  %s  changed_lines\n", label)
+	}
 }
 
 func writePlan(w io.Writer, dag plan.DAG) {
@@ -136,7 +156,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		dag = plan.WithLatencyN(dag, *n)
 	}
 
-	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload)
+	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, *dir)
 	if err != nil {
 		return err
 	}

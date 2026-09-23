@@ -52,7 +52,7 @@ func TestFromDiffRuntimeOnlyOnCodeFile(t *testing.T) {
 		t.Fatalf("runtime=%+v", rep.Runtime)
 	}
 	r := rep.Runtime[0]
-	if r.Service != "reroute" || r.Path != "/api/health" || r.Reason != "code_file" || r.Provenance != locate.ProvenanceCodeAttrs {
+	if r.Service != "reroute" || r.Path != "/api/health" || r.Route != "GET /api/health" || r.Reason != "code_file" || r.Provenance != locate.ProvenanceCodeAttrs {
 		t.Fatalf("%+v", r)
 	}
 	if strings.Contains(r.Name, "checkout") {

@@ -53,7 +53,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if *n > 0 {
 		dag = plan.WithLatencyN(dag, *n)
 	}
-	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload)
+	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, *dir)
 	if err != nil {
 		return err
 	}

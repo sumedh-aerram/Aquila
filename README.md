@@ -66,6 +66,8 @@ make shop-smoke
 ./bin/aquila status
 ./bin/aquila observe -traces 20
 ./bin/aquila ask checkout
+# after an IDE save, no question cites the dirty lines:
+aquila ask
 ./bin/aquila patch -f internal/pair/testdata/d1.diff
 git diff -- examples/shop/internal/payment/handler.go | ./bin/aquila impact -traces 20
 ```
@@ -127,16 +129,19 @@ export AQUILA_API_URL=http://127.0.0.1:8080   # default
 cd /path/to/your/app
 # process exports OTLP to 127.0.0.1:4317 (not otel-collector:4317 — that is Docker DNS)
 aquila observe -service ledger
-# edit files in the IDE
-aquila impact -service ledger
+# edit files in the IDE, then:
+aquila observe -service ledger    # edit section: function + line + bound route
+aquila impact -service ledger     # same blast radius, with line numbers
+aquila ask                        # no question: cites the dirty lines
 aquila plan -service ledger
+aquila replay -service ledger -dir . -base … -patch …   # prefers routes bound to the edit
 aquila experiment -service ledger -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out /tmp/evidence.json
 aquila report /tmp/evidence.json
 aquila job -service ledger -base … -patch …
 aquila worker -once -job <id>
 ```
 
-`observe` prints `origin=cwd` for a Go module, `origin=none` when there is no `go.mod` (Python and friends), and `origin=api` only when you are standing in the Aquila control-plane repo so shop diffs still map. It will not pretend a foreign app is `examples/shop`. `impact` without a piped diff reads **your** uncommitted changes. Typed callers (`direct` / `likely`) need a Go module. Otherwise findings are file-level: changed paths, unobserved until spans set `code.file.path`. Runtime joins only on that attribute — not on filename or route guesses. `ask` matches hops, **routes**, binds, and local impact tokens.
+`observe` prints `origin=cwd` for a Go module, `origin=none` when there is no `go.mod` (Python and friends), and `origin=api` only when you are standing in the Aquila control-plane repo so shop diffs still map. It will not pretend a foreign app is `examples/shop`. After an IDE save, `observe` and `impact` name the changed function and line when the hunk overlaps a typed function, and a bound HTTP route when locate hits. `ask` with no question cites that worktree; with a question it still token-matches hops, routes, binds, and impact. Typed callers (`direct` / `likely`) need a Go module. Otherwise findings are file-level: changed paths, unobserved until spans set `code.file.path`. Runtime joins only on that attribute — not on filename or route guesses. Span-derived replay prefers GET/HEAD/OPTIONS routes bound to the edit (`changed_lines`); if the edit is not on a replayable route, the window is used.
 
 Do not bind the app under test to `:8080` (that is Aquila). ReRoute’s README uses 8080; pick another port. Omitting `-base`/`-patch` starts shop Compose **only** when `-dir` is `examples/shop` or this repository; a foreign checkout errors and asks for two gateway URLs. `-fixture` is shop checkout smoke and is rejected off the shop. POST needs `-workload` you wrote.
 

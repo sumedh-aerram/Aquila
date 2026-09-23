@@ -196,6 +196,9 @@ func TestRunImpactWorktree(t *testing.T) {
 	if !strings.Contains(got, "diff=worktree") || !strings.Contains(got, "Hello") {
 		t.Fatalf("%s", got)
 	}
+	if !strings.Contains(got, "hello.go:") {
+		t.Fatalf("missing line: %s", got)
+	}
 }
 
 func TestRunObserveForeignDirNotShop(t *testing.T) {
@@ -573,6 +576,146 @@ func TestRunReplayServiceDropsOtherAttachRoutes(t *testing.T) {
 	}
 	got := out.String()
 	if !strings.Contains(got, "GET /invoice") || strings.Contains(got, "/users") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunObservePrintsEditForDirtyModule(t *testing.T) {
+	t.Parallel()
+	dir := writeModule(t, "example.com/app", "package app\n\nfunc Hello() int {\n\treturn 1\n}\n")
+	runGitInit(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package app\n\nfunc Hello() int {\n\treturn 2\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{
+				TraceCount: 1,
+				SpanCount:  1,
+				Services:   []graph.Service{{Name: "api", SpanCount: 1}},
+			})
+		case "/v1/spans":
+			writeTestJSON(w, map[string]any{
+				"spans": []ingest.Span{{
+					TraceID:      "aa",
+					SpanID:       "01",
+					ServiceName:  "api",
+					Kind:         "server",
+					HTTPMethod:   http.MethodGet,
+					HTTPRoute:    "/v1/foo",
+					CodeFunction: "Hello",
+					CodeFile:     "hello.go",
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errBuf strings.Builder
+	err := RunObserve(t.Context(), []string{"-api", srv.URL, "-dir", dir}, &out, &errBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "edit") || !strings.Contains(got, "Hello") || !strings.Contains(got, "hello.go:") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "GET /v1/foo") {
+		t.Fatalf("missing bound route:\n%s", got)
+	}
+}
+
+func TestRunReplayPrefersChangedLineRoutes(t *testing.T) {
+	t.Parallel()
+	dir := writeModule(t, "example.com/app", "package app\n\nfunc Hello() int {\n\treturn 1\n}\n")
+	runGitInit(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package app\n\nfunc Hello() int {\n\treturn 2\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/spans" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{
+			"spans": []ingest.Span{
+				{
+					TraceID: "1", SpanID: "a", ServiceName: "api", Kind: "server",
+					HTTPMethod: http.MethodGet, HTTPRoute: "/other",
+				},
+				{
+					TraceID: "2", SpanID: "b", ServiceName: "api", Kind: "server",
+					HTTPMethod: http.MethodGet, HTTPRoute: "/v1/foo",
+					CodeFunction: "Hello", CodeFile: "hello.go",
+				},
+			},
+		})
+	}))
+	t.Cleanup(api.Close)
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/v1/foo" {
+			http.NotFound(w, r)
+			return
+		}
+		writeReplayJSON(w, map[string]any{"ok": true})
+	}))
+	t.Cleanup(gw.Close)
+	var out strings.Builder
+	err := RunReplay(t.Context(), []string{
+		"-api", api.URL, "-dir", dir, "-base", gw.URL, "-patch", gw.URL,
+	}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "GET /v1/foo") || strings.Contains(got, "/other") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "provenance changed_lines") {
+		t.Fatalf("%s", got)
+	}
+	for _, p := range paths {
+		if p == "/other" {
+			t.Fatal("replayed unbound route")
+		}
+	}
+}
+
+func TestRunAskLocalEdit(t *testing.T) {
+	t.Parallel()
+	dir := writeModule(t, "example.com/app", "package app\n\nfunc Hello() int {\n\treturn 1\n}\n")
+	runGitInit(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package app\n\nfunc Hello() int {\n\treturn 2\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{Services: []graph.Service{{Name: "api"}}})
+		case "/v1/spans":
+			writeTestJSON(w, map[string]any{
+				"spans": []ingest.Span{{
+					TraceID: "aa", SpanID: "01", ServiceName: "api", Kind: "server",
+					HTTPMethod: http.MethodGet, HTTPRoute: "/v1/foo",
+					CodeFunction: "Hello", CodeFile: "hello.go",
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errBuf strings.Builder
+	err := RunAsk(t.Context(), []string{"-api", srv.URL, "-dir", dir}, strings.NewReader(""), &out, &errBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "local edit") || !strings.Contains(got, "Hello") {
 		t.Fatalf("%s", got)
 	}
 }

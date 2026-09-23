@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
@@ -23,6 +24,7 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 	workload := fs.String("workload", "", "operator workload JSON (not derived from traces)")
 	traces := fs.Int("traces", defaultTraces, "trace window for span-derived routes (max 200)")
 	service := fs.String("service", "", "OTEL service.name; required when the window mixes apps")
+	dir := fs.String("dir", ".", "module under change; local edits narrow span-derived replay")
 	n := fs.Int("n", 1, "replay repeats for latency samples (p95 withheld below 20)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: replay: %w", err)
@@ -34,7 +36,7 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("cli: replay: -base and -patch are required")
 	}
 
-	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload)
+	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, *dir)
 	if err != nil {
 		return err
 	}
@@ -124,7 +126,7 @@ func joinNotes(notes []string) string {
 	return strings.Join(notes, ",")
 }
 
-func loadWorkload(ctx context.Context, api string, traces int, service string) (replay.Workload, error) {
+func loadWorkload(ctx context.Context, api string, traces int, service, dir string) (replay.Workload, error) {
 	spans, err := fetchSpans(ctx, api, traces, service)
 	if err != nil {
 		return replay.Workload{}, err
@@ -132,10 +134,19 @@ func loadWorkload(ctx context.Context, api string, traces int, service string) (
 	if err := rejectMixedWindow(spans, service); err != nil {
 		return replay.Workload{}, err
 	}
-	return replay.FromSpans(spans), nil
+	w := replay.FromSpans(spans)
+	raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", dir)
+	if err != nil || len(raw) == 0 {
+		return w, nil
+	}
+	rep, _, err := analyzeDiff(ctx, api, dir, traces, service, raw)
+	if err != nil {
+		return w, nil
+	}
+	return replay.RestrictToRoutes(w, impact.ReplayableRoutes(rep), replay.ProvenanceChangedLines), nil
 }
 
-func resolveWorkload(ctx context.Context, api string, traces int, service string, shopFixture bool, workloadPath string) (replay.Workload, error) {
+func resolveWorkload(ctx context.Context, api string, traces int, service string, shopFixture bool, workloadPath, dir string) (replay.Workload, error) {
 	if shopFixture && strings.TrimSpace(workloadPath) != "" {
 		return replay.Workload{}, fmt.Errorf("cli: -fixture and -workload are mutually exclusive")
 	}
@@ -145,7 +156,7 @@ func resolveWorkload(ctx context.Context, api string, traces int, service string
 	if strings.TrimSpace(workloadPath) != "" {
 		return replay.ReadFile(workloadPath)
 	}
-	return loadWorkload(ctx, api, traces, service)
+	return loadWorkload(ctx, api, traces, service, dir)
 }
 
 func rejectMixedWindow(spans []ingest.Span, service string) error {

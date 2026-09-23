@@ -20,6 +20,8 @@ type Finding struct {
 	SourceID   string `json:"source_id,omitempty"`
 	Service    string `json:"service,omitempty"`
 	Path       string `json:"path,omitempty"`
+	Route      string `json:"route,omitempty"`
+	Line       int    `json:"line,omitempty"`
 	Reason     string `json:"reason"`
 	Provenance string `json:"provenance"`
 }
@@ -69,17 +71,17 @@ func Analyze(g *source.Graph, d diff.Diff, loc locate.Snapshot, rt graph.Snapsho
 			})
 			continue
 		}
-		funcs := overlappingFuncs(idx.funcs[path], f.Lines)
-		if len(funcs) == 0 {
+		hits := overlappingFuncs(idx.funcs[path], f.Lines)
+		if len(hits) == 0 {
 			out.Direct = appendFinding(out.Direct, Finding{
 				Name: fileNode.Name, File: path, SourceID: fileNode.ID, Reason: "changed_file", Provenance: "diff",
 			})
 			continue
 		}
-		for _, fn := range funcs {
-			directID[fn.ID] = struct{}{}
+		for _, h := range hits {
+			directID[h.fn.ID] = struct{}{}
 			out.Direct = appendFinding(out.Direct, Finding{
-				Name: fn.Name, File: fn.File, SourceID: fn.ID, Reason: "changed_lines", Provenance: "diff",
+				Name: h.fn.Name, File: h.fn.File, SourceID: h.fn.ID, Line: h.line, Reason: "changed_lines", Provenance: "diff",
 			})
 		}
 	}
@@ -102,7 +104,7 @@ func Analyze(g *source.Graph, d diff.Diff, loc locate.Snapshot, rt graph.Snapsho
 			}
 			likelyID[n.Node.ID] = struct{}{}
 			out.Likely = appendFinding(out.Likely, Finding{
-				Name: n.Node.Name, File: n.Node.File, SourceID: n.Node.ID, Reason: "caller", Provenance: source.ProvenanceTypes,
+				Name: n.Node.Name, File: n.Node.File, SourceID: n.Node.ID, Line: n.Node.Line, Reason: "caller", Provenance: source.ProvenanceTypes,
 			})
 		}
 	}
@@ -115,20 +117,26 @@ func Analyze(g *source.Graph, d diff.Diff, loc locate.Snapshot, rt graph.Snapsho
 		watch[id] = struct{}{}
 	}
 	services := map[string]struct{}{}
+	seenBind := map[string]struct{}{}
 	for _, b := range loc.Bindings {
 		if _, ok := watch[b.SourceID]; !ok {
 			continue
 		}
-		if b.ServiceName == "" {
+		route := routeLabel(b.HTTPMethod, b.HTTPRoute)
+		key := b.ServiceName + "\x00" + b.SourceID + "\x00" + route
+		if _, dup := seenBind[key]; dup {
 			continue
 		}
-		if _, dup := services[b.ServiceName]; dup {
+		seenBind[key] = struct{}{}
+		if b.ServiceName != "" {
+			services[b.ServiceName] = struct{}{}
+		}
+		if b.ServiceName == "" && route == "" {
 			continue
 		}
-		services[b.ServiceName] = struct{}{}
 		out.Runtime = appendFinding(out.Runtime, Finding{
 			Name: b.SourceName, File: b.File, SourceID: b.SourceID, Service: b.ServiceName,
-			Reason: "bound_span", Provenance: locate.ProvenanceCodeAttrs,
+			Line: b.Line, Route: route, Reason: "bound_span", Provenance: locate.ProvenanceCodeAttrs,
 		})
 	}
 	for _, p := range rt.Paths {
@@ -192,7 +200,12 @@ func index(g *source.Graph) srcIndex {
 	return idx
 }
 
-func overlappingFuncs(funcs []source.Node, lines []int) []source.Node {
+type funcHit struct {
+	fn   source.Node
+	line int
+}
+
+func overlappingFuncs(funcs []source.Node, lines []int) []funcHit {
 	if len(funcs) == 0 || len(lines) == 0 {
 		return nil
 	}
@@ -209,7 +222,7 @@ func overlappingFuncs(funcs []source.Node, lines []int) []source.Node {
 		spans = append(spans, span{n: fn, end: end})
 	}
 	seen := map[string]struct{}{}
-	var out []source.Node
+	var out []funcHit
 	for _, ln := range lines {
 		for _, s := range spans {
 			if ln < s.n.Line || ln >= s.end {
@@ -219,11 +232,26 @@ func overlappingFuncs(funcs []source.Node, lines []int) []source.Node {
 				break
 			}
 			seen[s.n.ID] = struct{}{}
-			out = append(out, s.n)
+			out = append(out, funcHit{fn: s.n, line: ln})
 			break
 		}
 	}
 	return out
+}
+
+func routeLabel(method, path string) string {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	path = strings.TrimSpace(path)
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if method == "" || path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return method + " " + path
 }
 
 func appendFinding(dst []Finding, f Finding) []Finding {

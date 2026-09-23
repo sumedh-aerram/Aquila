@@ -26,7 +26,19 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		return fmt.Errorf("cli: ask: %w", err)
 	}
 	q := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if q == "" {
+	var diffRaw []byte
+	if *file != "" {
+		raw, err := slurpDiff(stdin, *file)
+		if err != nil {
+			return fmt.Errorf("cli: ask: %w", err)
+		}
+		diffRaw = raw
+	} else {
+		if raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", *dir); err == nil {
+			diffRaw = raw
+		}
+	}
+	if q == "" && len(diffRaw) == 0 {
 		return fmt.Errorf("cli: ask: question required")
 	}
 
@@ -58,25 +70,18 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		Binds:    bindLines(loc),
 		Routes:   routeFacts(spans),
 	}
-	if *file != "" {
-		raw, err := slurpDiff(stdin, *file)
+	if len(diffRaw) > 0 {
+		rep, _, err := analyzeDiff(ctx, *api, *dir, n, *service, diffRaw)
 		if err != nil {
-			return fmt.Errorf("cli: ask: %w", err)
-		}
-		rep, _, err := analyzeDiff(ctx, *api, *dir, n, *service, raw)
-		if err != nil {
-			return err
-		}
-		in.Impact = &rep
-	} else if origin != originAPI {
-		raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", *dir)
-		if err == nil && len(raw) > 0 {
-			rep, _, err := analyzeDiff(ctx, *api, *dir, n, *service, raw)
-			if err != nil {
+			if q == "" {
 				return err
 			}
+		} else {
 			in.Impact = &rep
 		}
+	}
+	if q == "" && in.Impact == nil {
+		return fmt.Errorf("cli: ask: question required")
 	}
 
 	rep, err := investigate.Search(in)
@@ -128,7 +133,14 @@ func pathLines(rt graph.Snapshot) []string {
 func bindLines(loc locate.Snapshot) []string {
 	out := make([]string, 0, len(loc.Bindings))
 	for _, b := range loc.Bindings {
-		out = append(out, strings.TrimSpace(b.ServiceName+" "+b.SourceName+" "+b.File))
+		line := strings.TrimSpace(b.ServiceName + " " + b.SourceName + " " + b.File)
+		if b.Line > 0 {
+			line += fmt.Sprintf(":%d", b.Line)
+		}
+		if r := strings.TrimSpace(b.HTTPMethod + " " + b.HTTPRoute); strings.Contains(r, "/") {
+			line += " " + strings.ToUpper(strings.TrimSpace(b.HTTPMethod)) + " " + strings.TrimSpace(b.HTTPRoute)
+		}
+		out = append(out, line)
 	}
 	return out
 }

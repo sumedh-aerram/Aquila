@@ -8,8 +8,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sumedhaerram/aquila/internal/diff"
 	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/graph"
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/locate"
 	"github.com/sumedhaerram/aquila/internal/source"
@@ -62,6 +64,7 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	writef(stdout, "api  %s  traces=%d\n\n", c.base, n)
 	writeAttach(stdout, *service, spans)
 	writeWorktree(stdout, ctx, *dir)
+	writeLocalEdit(stdout, ctx, *dir, origin, loc, spans)
 	writeRuntime(stdout, rt)
 	writeRoutes(stdout, spans)
 	writef(stdout, "\n")
@@ -230,6 +233,46 @@ func writeRoutes(w io.Writer, spans []ingest.Span) {
 	for _, r := range routes {
 		writef(w, "    %s\n", r)
 	}
+}
+
+func writeLocalEdit(w io.Writer, ctx context.Context, dir, origin string, loc locate.Snapshot, spans []ingest.Span) {
+	if origin == originAPI {
+		return
+	}
+	raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", dir)
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	parsed, err := diff.Parse(raw)
+	if err != nil {
+		return
+	}
+	var rep impact.Report
+	if g := loadTargetSource(ctx, dir); g != nil {
+		rep = impact.Analyze(g, parsed, loc, graph.Build(spans))
+	} else {
+		rep = impact.FromDiff(parsed, spans)
+	}
+	if len(rep.Direct) == 0 && len(rep.Runtime) == 0 && len(rep.Unobserved) == 0 {
+		return
+	}
+	writef(w, "edit     origin=%s  files=%d  direct=%d  runtime=%d\n", origin, len(rep.Files), len(rep.Direct), len(rep.Runtime))
+	n := 0
+	for _, f := range rep.Direct {
+		writeFinding(w, f)
+		n++
+		if n >= maxPrintBindings {
+			break
+		}
+	}
+	for _, f := range rep.Runtime {
+		if n >= maxPrintBindings {
+			break
+		}
+		writeFinding(w, f)
+		n++
+	}
+	writef(w, "\n")
 }
 
 func writeWorktree(w io.Writer, ctx context.Context, dir string) {

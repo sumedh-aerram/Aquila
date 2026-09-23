@@ -35,6 +35,8 @@ type Binding struct {
 	SourceName   string `json:"source_name"`
 	File         string `json:"file"`
 	Line         int    `json:"line,omitempty"`
+	HTTPMethod   string `json:"http_method,omitempty"`
+	HTTPRoute    string `json:"http_route,omitempty"`
 	Provenance   string `json:"provenance"`
 }
 
@@ -193,6 +195,8 @@ func bindOne(idx sourceIndex, sp ingest.Span) (Binding, Unmapped, bool) {
 			SourceName:   fn.Name,
 			File:         fn.File,
 			Line:         fn.Line,
+			HTTPMethod:   strings.TrimSpace(sp.HTTPMethod),
+			HTTPRoute:    strings.TrimSpace(sp.HTTPRoute),
 			Provenance:   ProvenanceCodeAttrs,
 		}, Unmapped{}, true
 	default:

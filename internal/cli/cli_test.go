@@ -1005,9 +1005,12 @@ func TestRunAskHitsCheckout(t *testing.T) {
 
 func TestRunAskRequiresQuestion(t *testing.T) {
 	t.Parallel()
-	err := RunAsk(t.Context(), nil, strings.NewReader(""), io.Discard, io.Discard)
+	err := RunAsk(t.Context(), []string{"-dir", t.TempDir()}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "question required") {
+		t.Fatalf("%v", err)
 	}
 }
 

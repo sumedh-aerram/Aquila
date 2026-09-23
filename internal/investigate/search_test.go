@@ -85,6 +85,28 @@ func TestSearchIncludesImpactWhenPresent(t *testing.T) {
 	}
 }
 
+func TestSearchLocalEditCitesImpact(t *testing.T) {
+	t.Parallel()
+	imp := impact.Report{
+		Files:  []string{"main.go"},
+		Direct: []impact.Finding{{Name: "invoice", File: "main.go", Line: 59}},
+		Runtime: []impact.Finding{
+			{Name: "invoice", Service: "ledger", Route: "GET /invoice", Reason: "bound_span"},
+		},
+	}
+	rep, err := Search(Input{Origin: "cwd", Impact: &imp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Question != "local edit" {
+		t.Fatalf("question=%q", rep.Question)
+	}
+	joined := strings.Join(rep.Hits, "\n")
+	if !strings.Contains(joined, "invoice") || !strings.Contains(joined, "GET /invoice") {
+		t.Fatalf("%v", rep.Hits)
+	}
+}
+
 func TestSearchRejectsEmpty(t *testing.T) {
 	t.Parallel()
 	if _, err := Search(Input{}); err == nil {

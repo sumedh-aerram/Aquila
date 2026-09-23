@@ -22,6 +22,8 @@ func TestBindMapsExplicitPaymentAttrs(t *testing.T) {
 		Name:         "payment.Authorize",
 		CodeFunction: "Handler.authorize",
 		CodeFile:     "examples/shop/internal/payment/handler.go",
+		HTTPMethod:   "POST",
+		HTTPRoute:    "/authorize",
 	}})
 	if snap.Bound != 1 || len(snap.Bindings) != 1 {
 		t.Fatalf("%+v", snap)
@@ -29,6 +31,9 @@ func TestBindMapsExplicitPaymentAttrs(t *testing.T) {
 	b := snap.Bindings[0]
 	if b.SourceName != "authorize" || b.Provenance != ProvenanceCodeAttrs {
 		t.Fatalf("%+v", b)
+	}
+	if b.HTTPMethod != "POST" || b.HTTPRoute != "/authorize" {
+		t.Fatalf("route attrs=%+v", b)
 	}
 	if b.SourceID != "func:pay.Handler.authorize" {
 		t.Fatalf("source_id=%q", b.SourceID)

@@ -12,6 +12,8 @@ const (
 
 	// ProvenanceSpanRoute marks a step taken from a stored server-span route.
 	ProvenanceSpanRoute = "span_route"
+	// ProvenanceChangedLines marks a span route that also joined a local edit.
+	ProvenanceChangedLines = "changed_lines"
 	// ProvenanceShopFixture marks a step from the shop smoke fixture, not from traces.
 	ProvenanceShopFixture = "shop_fixture"
 )
@@ -72,6 +74,39 @@ func FromSpans(spans []ingest.Span) Workload {
 		if len(out.Steps) >= maxSteps {
 			break
 		}
+	}
+	return out
+}
+
+// RestrictToRoutes keeps steps whose "METHOD path" is in labels. An empty
+// match list, or a list that matches nothing, returns w unchanged.
+func RestrictToRoutes(w Workload, labels []string, provenance string) Workload {
+	if len(labels) == 0 || len(w.Steps) == 0 {
+		return w
+	}
+	keep := map[string]struct{}{}
+	for _, l := range labels {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		keep[l] = struct{}{}
+	}
+	if len(keep) == 0 {
+		return w
+	}
+	out := Workload{Steps: []Step{}}
+	for _, s := range w.Steps {
+		if _, ok := keep[s.Method+" "+s.Path]; !ok {
+			continue
+		}
+		if provenance != "" {
+			s.Provenance = provenance
+		}
+		out.Steps = append(out.Steps, s)
+	}
+	if len(out.Steps) == 0 {
+		return w
 	}
 	return out
 }

@@ -109,7 +109,7 @@ Flags:
   -shop path      env/experiment: shop module (default examples/shop)
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
   -pair path      experiment: pair parent when omitting -base/-patch (default out/env)
-  -dir path       observe/impact/plan/experiment: module (and git tree) under change (default .)
+  -dir path       observe/impact/plan/experiment/replay: module (and git tree) under change (default .)
   -service name   observe/impact/ask/replay/experiment/job: OTEL service.name (scopes the window)
   -job id         worker: lease only READY tasks for this job
   -base url       replay/experiment: baseline gateway
@@ -126,9 +126,13 @@ impact reads git diff HEAD in -dir when stdin is empty (local IDE changes).
 Pipe a unified diff or pass -f to override. It does not apply the patch.
 Standing in this repo falls back to POST /v1/impact so a shop snapshot still
 maps shop diffs. A directory without go.mod is file-level impact (origin=files),
-not the shop graph. Other Go modules are loaded from -dir. env copies the shop
+not the shop graph. Other Go modules are loaded from -dir. observe prints an
+edit section for those dirty lines when they join a function or bound route.
+ask with no question cites that same worktree. env copies the shop
 and applies the diff only to patch. replay hits -base and -patch using
-GET/HEAD/OPTIONS from server spans (no bodies). A window with more than one
+GET/HEAD/OPTIONS from server spans (no bodies). When -dir has a local edit
+that joins a replayable route, those steps are preferred (provenance
+changed_lines); otherwise the window is used. A window with more than one
 service refuses span-derived replay unless -service is set. -workload is an operator JSON
 file for POST and friends. -fixture is shop smoke including POST /checkout.
 match is not a pass. p95 is withheld unless n>=20. No regression threshold.
