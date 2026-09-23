@@ -149,6 +149,7 @@ migrate:
 
 dev:
 	$(COMPOSE) up -d --build
+	$(COMPOSE) restart otel-collector
 
 down:
 	$(COMPOSE) down
