@@ -5,10 +5,14 @@ Aquila is a **control plane for changing distributed backends safely**.
 It sits beside a running system—not inside the request path—and holds three things most tools never put in one place: **what the code is**, **how the system actually behaves**, and **whether a proposed patch changed that behavior**. The last question is answered only by executing the same production-shaped workload against **baseline and patch** in isolated environments. Confidence is not evidence. A skipped experiment is not a pass.
 
 ```
-$ aquila ask "reduce checkout p95 latency"
+$ git diff | aquila impact
+$ git diff | aquila experiment -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out evidence.json
+$ aquila report evidence.json
 ```
 
-Investigate from traces, map the blast radius onto source, apply a focused change, run the experiment DAG, report what the two revisions did.
+Datadog will show you the hop. Copilot will edit the file. Neither will join a git diff to the path that actually ran, then hit **the same routes** on two revisions and tell you match, differ, or incomplete — without calling that a pass.
+
+Investigate from traces, map the blast radius onto source, apply a focused change, run the experiment, report what the two revisions did. There is no `ask` command yet.
 
 ## Why a control plane
 
@@ -26,7 +30,7 @@ That is control-plane work: durable state, at-least-once ingestion, incomplete d
 
 Git is source of truth. OpenTelemetry is runtime truth. PostgreSQL is Aquila’s coordination state. The language model may propose; it never authors system state.
 
-V1 targets containerized Go and Python services on Docker Compose or Kubernetes, HTTP/gRPC, Postgres, Redis, instrumented with OpenTelemetry. The domain is narrow so the graph can be honest.
+V1 targets containerized Go HTTP services on Docker Compose, instrumented with OpenTelemetry. Python or other runtimes can export OTLP (hops still appear); typed impact and locate need a Go module in `-dir`. The domain is narrow so the graph can be honest.
 
 ## What it does
 
@@ -77,7 +81,7 @@ curl -sf 'http://127.0.0.1:8080/v1/locate?traces=20'
 make down
 ```
 
-`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. `aquila status` and `aquila observe` print those APIs as text (`observed_parent` hops vs `code_attrs` binds). `aquila impact` analyzes a unified diff against the Go module in `-dir` (default cwd) and prints direct/likely/runtime/unobserved — it does not apply the patch or keep hunk bodies. Standing in this repository falls back to `POST /v1/impact` so a shop snapshot still maps shop diffs. Labeled D1–D6 diffs (`make impact-eval`) measure function recall on that engine; they are not extra shop bugs. `aquila env` copies `examples/shop` twice on the operator machine, applies the diff only to patch, and writes one compose file plus two env files (ports 18180/18280). It does not start containers, does not touch the live shop on 18080, and does not send experiment traces to the live Aquila store. `aquila replay -base … -patch … [-n 20]` sends the same workload to two gateways and reports match, differ, or incomplete. Without `-fixture`, that workload is GET/HEAD/OPTIONS from server-span routes in the trace window (parameterized `{…}` templates and POST/PUT/PATCH/DELETE are skipped; bodies never come from traces). `-fixture` is shop checkout smoke only. Match is not a pass. Median is printed from successful samples; p95 is withheld unless n≥20. There is no regression threshold. `aquila fault -target …` is a loopback reverse proxy that can delay or inject a status; point replay at that listen address. An injected 502 is a probe, not a pass. `aquila plan` turns impact into the smallest DAG Aquila can currently name (env, behavior, latency, and an operator fault when runtime paths exist). `aquila experiment -base … -patch … [-out out/evidence.json]` executes behavior and latency only; skipped operator steps are not a pass. `-out` writes evidence JSON (`validated` is always false; request bodies are omitted). The same artifact is POSTed to `/v1/runs` when the API is up; if the store is down the CLI prints `unrecorded` and still keeps the local file. `aquila runs` lists stored evidence, `aquila runs <id>` shows one, `aquila runs -f out/evidence.json` imports a file. `aquila report out/evidence.json` renders that file as Markdown and does not re-hit gateways. There is no `ask` command yet. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
+`GET /v1/spans` is observed metadata from live shop traffic. `GET /v1/graph` is topology derived from those spans: an edge exists only when parent and child are in the window and the services differ. `GET /v1/source` is a typed parse of `examples/shop`: packages, files, functions, in-module imports, and typed calls. HTTP hops are not invented as call edges. `GET /v1/locate` binds spans to functions only when `code.function.name` and `code.file.path` uniquely match a source node. Neighbors: `GET /v1/source/neighbors?id=...`. `aquila status` and `aquila observe` print those APIs as text (`observed_parent` hops vs `code_attrs` binds). `observe -dir` (default cwd) loads that Go module and binds locally; standing in this repository falls back to `GET /v1/source` so the shop snapshot still maps. Output labels `origin=cwd` or `origin=api`. `aquila impact` analyzes a unified diff against the Go module in `-dir` (default cwd) and prints direct/likely/runtime/unobserved — it does not apply the patch or keep hunk bodies. Standing in this repository falls back to `POST /v1/impact` so a shop snapshot still maps shop diffs. Labeled D1–D6 diffs (`make impact-eval`) measure function recall on that engine; they are not extra shop bugs. `aquila env` copies `examples/shop` twice on the operator machine, applies the diff only to patch, and writes one compose file plus two env files (ports 18180/18280). It does not start containers, does not touch the live shop on 18080, and does not send experiment traces to the live Aquila store. `aquila replay -base … -patch … [-n 20]` sends the same workload to two gateways and reports match, differ, or incomplete. Without `-fixture`, that workload is GET/HEAD/OPTIONS from server-span routes in the trace window (parameterized `{…}` templates and POST/PUT/PATCH/DELETE are skipped; bodies never come from traces). `-workload file.json` is an operator file for mutating requests. `-fixture` is shop checkout smoke only. Match is not a pass. Median is printed from successful samples; p95 is withheld unless n≥20. There is no regression threshold. `aquila fault -target …` is a loopback reverse proxy that can delay or inject a status; point replay at that listen address. An injected 502 is a probe, not a pass. `aquila plan` turns impact into the smallest DAG Aquila can currently name (env, behavior, latency, and an operator fault when runtime paths exist). `aquila experiment -base … -patch … [-out out/evidence.json]` executes behavior and latency only; skipped operator steps are not a pass. `-out` writes evidence JSON (`validated` is always false; request bodies are omitted). The same artifact is POSTed to `/v1/runs` when the API is up; if the store is down the CLI prints `unrecorded` and still keeps the local file. `aquila runs` lists stored evidence, `aquila runs <id>` shows one, `aquila runs -f out/evidence.json` imports a file. `aquila report out/evidence.json` renders that file as Markdown and does not re-hit gateways. There is no `ask` command yet. The Compose image snapshots that graph at build time; rebuild after shop source changes. Shop layout and defects: [examples/shop/README.md](examples/shop/README.md), [examples/shop/DEFECTS.md](examples/shop/DEFECTS.md).
 
 ## How it is put together
 
@@ -118,15 +122,16 @@ The shop is the reference system and the only Compose env Aquila can prepare. Ex
 From Libra, Reroute, or any other instrumented HTTP service:
 
 1. Put `./bin/aquila` on `PATH`. The CLI talks to `AQUILA_API_URL` (default `http://127.0.0.1:8080`).
-2. `cd` into that module. `impact`, `plan`, and `experiment` load source from `-dir` (default `.`). Standing in the Aquila repo itself falls back to the server snapshot so shop diffs still map.
+2. `cd` into that module. `observe`, `impact`, `plan`, and `experiment` load source from `-dir` (default `.`). Standing in the Aquila repo itself falls back to the server snapshot so shop diffs still map. `observe` prints `origin=cwd` when it used your module.
 3. Start **two** isolated gateways yourself. `aquila env` copies the shop Compose shape and will not boot Libra.
-4. Do not pass `-fixture` (that is shop checkout smoke). Replay uses GET/HEAD/OPTIONS from stored server spans. POST stays closed unless you pass `-fixture`.
+4. Do not pass `-fixture` (that is shop checkout smoke). Replay uses GET/HEAD/OPTIONS from stored server spans. For POST, pass `-workload routes.json` you wrote — never inferred from traces.
 
 ```bash
 export AQUILA_API_URL=http://127.0.0.1:8080
 cd /path/to/libra
+aquila observe -traces 20
 git diff | aquila impact -traces 20
-git diff | aquila experiment -dir . -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out /tmp/evidence.json
+git diff | aquila experiment -dir . -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -workload routes.json -out /tmp/evidence.json
 aquila runs
 aquila report /tmp/evidence.json
 ```

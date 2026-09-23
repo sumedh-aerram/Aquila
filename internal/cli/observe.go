@@ -27,6 +27,7 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	fs.SetOutput(io.Discard)
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
+	dir := fs.String("dir", ".", "module under change (default cwd)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: observe: %w", err)
 	}
@@ -45,14 +46,10 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 
-	var src source.Snapshot
-	srcErr := c.getJSON(ctx, "/v1/source", &src)
+	src, loc, origin, srcErr, locErr := observeJoin(ctx, c, *api, *dir, n, q)
 	if srcErr != nil && !unavailable(srcErr) {
 		return srcErr
 	}
-
-	var loc locate.Snapshot
-	locErr := c.getJSON(ctx, "/v1/locate"+q, &loc)
 	if locErr != nil && !unavailable(locErr) {
 		return locErr
 	}
@@ -64,7 +61,7 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		writef(stdout, "source  unavailable\n")
 		writef(stderr, "observe: source: %v\n", srcErr)
 	} else {
-		writeSource(stdout, src)
+		writeSource(stdout, src, origin)
 	}
 	writef(stdout, "\n")
 	if locErr != nil {
@@ -74,6 +71,30 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		writeLocate(stdout, loc)
 	}
 	return nil
+}
+
+func observeJoin(ctx context.Context, c *Client, api, dir string, traces int, q string) (src source.Snapshot, loc locate.Snapshot, origin string, srcErr, locErr error) {
+	if g := loadTargetSource(ctx, dir); g != nil {
+		origin = "cwd"
+		src = g.Snapshot()
+		spans, err := fetchSpans(ctx, api, traces)
+		if err != nil {
+			locErr = err
+			return src, loc, origin, srcErr, locErr
+		}
+		loc = locate.Bind(g, spans)
+		return src, loc, origin, nil, nil
+	}
+	origin = "api"
+	srcErr = c.getJSON(ctx, "/v1/source", &src)
+	if srcErr != nil && !unavailable(srcErr) {
+		return src, loc, origin, srcErr, nil
+	}
+	locErr = c.getJSON(ctx, "/v1/locate"+q, &loc)
+	if locErr != nil && !unavailable(locErr) {
+		return src, loc, origin, srcErr, locErr
+	}
+	return src, loc, origin, srcErr, locErr
 }
 
 func writeRuntime(w io.Writer, rt graph.Snapshot) {
@@ -114,7 +135,7 @@ func writeRuntime(w io.Writer, rt graph.Snapshot) {
 	}
 }
 
-func writeSource(w io.Writer, src source.Snapshot) {
+func writeSource(w io.Writer, src source.Snapshot, origin string) {
 	var pkgs, files, funcs int
 	for _, n := range src.Nodes {
 		switch n.Kind {
@@ -126,7 +147,7 @@ func writeSource(w io.Writer, src source.Snapshot) {
 			funcs++
 		}
 	}
-	writef(w, "source  module=%s\n", emptyDash(src.Module))
+	writef(w, "source  module=%s  origin=%s\n", emptyDash(src.Module), origin)
 	writef(w, "  packages %d  files %d  functions %d  edges %d\n", pkgs, files, funcs, len(src.Edges))
 }
 

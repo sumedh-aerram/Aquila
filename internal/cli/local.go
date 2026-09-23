@@ -40,18 +40,29 @@ func loadTargetSource(ctx context.Context, dir string) *source.Graph {
 }
 
 func impactFromWindow(ctx context.Context, api string, traces int, g *source.Graph, raw []byte) (impact.Report, error) {
-	c, err := newClient(api)
+	spans, err := fetchSpans(ctx, api, traces)
 	if err != nil {
 		return impact.Report{}, err
+	}
+	return reportFromLocal(g, spans, raw)
+}
+
+func fetchSpans(ctx context.Context, api string, traces int) ([]ingest.Span, error) {
+	c, err := newClient(api)
+	if err != nil {
+		return nil, err
 	}
 	var payload struct {
 		Spans []ingest.Span `json:"spans"`
 	}
 	path := "/v1/spans?traces=" + strconv.Itoa(clipTraces(traces))
 	if err := c.getJSON(ctx, path, &payload); err != nil {
-		return impact.Report{}, err
+		return nil, err
 	}
-	return reportFromLocal(g, payload.Spans, raw)
+	if payload.Spans == nil {
+		payload.Spans = []ingest.Span{}
+	}
+	return payload.Spans, nil
 }
 
 func reportFromLocal(g *source.Graph, spans []ingest.Span, raw []byte) (impact.Report, error) {

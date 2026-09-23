@@ -88,6 +88,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	base := fs.String("base", "", "baseline gateway URL")
 	patch := fs.String("patch", "", "patch gateway URL")
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
+	workload := fs.String("workload", "", "operator workload JSON (not derived from traces)")
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
 	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
@@ -117,17 +118,12 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		dag = plan.WithLatencyN(dag, *n)
 	}
 
-	var w replay.Workload
-	if *fixture {
-		w = replay.ShopFixture()
-	} else {
-		w, err = loadWorkload(ctx, *api, *traces)
-		if err != nil {
-			return err
-		}
+	w, err := resolveWorkload(ctx, *api, *traces, *fixture, *workload)
+	if err != nil {
+		return err
 	}
 	if len(w.Steps) == 0 {
-		return fmt.Errorf("cli: experiment: empty workload (no replayable GET routes in server spans)")
+		return fmt.Errorf("cli: experiment: empty workload (no GET/HEAD/OPTIONS server routes in the trace window; pass -workload for mutating requests)")
 	}
 
 	ev, err := plan.Execute(ctx, dag, *base, *patch, w)

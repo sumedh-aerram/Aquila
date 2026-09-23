@@ -93,10 +93,11 @@ Flags:
   -f path         impact/env/plan/experiment: diff file (default stdin); runs: import evidence JSON
   -shop path      env: shop module (default examples/shop)
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
-  -dir path       impact/plan/experiment: module (and git tree) under change (default .)
+  -dir path       observe/impact/plan/experiment: module (and git tree) under change (default .)
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
+  -workload path  replay/experiment: operator JSON steps (bodies never from traces)
   -n int          replay: repeats (default 1). experiment: latency repeats (0 = plan default 20)
   -target url     fault: upstream gateway
   -listen addr    fault: loopback listen (default 127.0.0.1:19080)
@@ -107,7 +108,8 @@ impact reads git diff on stdin. It does not apply the patch. Standing in this
 repo falls back to POST /v1/impact so a shop snapshot still maps shop diffs;
 other modules are loaded from -dir. env copies the shop and applies the diff
 only to patch. replay hits -base and -patch using GET/HEAD/OPTIONS from server
-spans (no bodies); -fixture is shop smoke including POST /checkout. match is
+spans (no bodies). -workload is an operator JSON file for POST and friends.
+-fixture is shop smoke including POST /checkout. match is
 not a pass. p95 is withheld unless n>=20. No regression threshold. fault
 listens on loopback only; an injected 502 is a probe, not a pass. plan names
 env, behavior, latency, and (when runtime paths exist) an operator fault.

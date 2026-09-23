@@ -85,24 +85,6 @@ func skipKind(kind string) bool {
 	}
 }
 
-func safeReplay(method, path string) bool {
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-	default:
-		return false
-	}
-	if !strings.HasPrefix(path, "/") {
-		return false
-	}
-	if strings.Contains(path, "..") || strings.Contains(path, "\\") || strings.Contains(path, "@") {
-		return false
-	}
-	if strings.ContainsAny(path, "{}*") {
-		return false
-	}
-	return true
-}
-
 func routeParts(s ingest.Span) (method, path string, ok bool) {
 	method = strings.ToUpper(strings.TrimSpace(s.HTTPMethod))
 	path = strings.TrimSpace(s.HTTPRoute)

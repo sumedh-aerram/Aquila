@@ -20,6 +20,7 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 	base := fs.String("base", "", "baseline gateway URL")
 	patch := fs.String("patch", "", "patch gateway URL")
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
+	workload := fs.String("workload", "", "operator workload JSON (not derived from traces)")
 	traces := fs.Int("traces", defaultTraces, "trace window for span-derived routes (max 200)")
 	n := fs.Int("n", 1, "replay repeats for latency samples (p95 withheld below 20)")
 	if err := fs.Parse(args); err != nil {
@@ -32,18 +33,12 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("cli: replay: -base and -patch are required")
 	}
 
-	var w replay.Workload
-	if *fixture {
-		w = replay.ShopFixture()
-	} else {
-		var err error
-		w, err = loadWorkload(ctx, *api, *traces)
-		if err != nil {
-			return err
-		}
+	w, err := resolveWorkload(ctx, *api, *traces, *fixture, *workload)
+	if err != nil {
+		return err
 	}
 	if len(w.Steps) == 0 {
-		return fmt.Errorf("cli: replay: empty workload (no replayable GET routes in server spans)")
+		return fmt.Errorf("cli: replay: empty workload (no GET/HEAD/OPTIONS server routes in the trace window; pass -workload for mutating requests)")
 	}
 
 	baseRuns, err := replay.Repeat(ctx, *base, w, *n)
@@ -141,4 +136,17 @@ func loadWorkload(ctx context.Context, api string, traces int) (replay.Workload,
 		return replay.Workload{}, err
 	}
 	return replay.FromSpans(payload.Spans), nil
+}
+
+func resolveWorkload(ctx context.Context, api string, traces int, shopFixture bool, workloadPath string) (replay.Workload, error) {
+	if shopFixture && strings.TrimSpace(workloadPath) != "" {
+		return replay.Workload{}, fmt.Errorf("cli: -fixture and -workload are mutually exclusive")
+	}
+	if shopFixture {
+		return replay.ShopFixture(), nil
+	}
+	if strings.TrimSpace(workloadPath) != "" {
+		return replay.ReadFile(workloadPath)
+	}
+	return loadWorkload(ctx, api, traces)
 }

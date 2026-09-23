@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/source"
@@ -220,6 +221,103 @@ func TestRunReplaySkipsPOSTWithoutFixture(t *testing.T) {
 		"-patch", "http://127.0.0.1:18280",
 	}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "empty workload") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestRunObserveUsesLocalModule(t *testing.T) {
+	t.Parallel()
+	dir := writeModule(t, "example.com/app", "package app\n\nfunc Hello() int {\n\treturn 1\n}\n")
+	var usedAPISource atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{
+				TraceCount: 1,
+				SpanCount:  1,
+				Services:   []graph.Service{{Name: "api", SpanCount: 1}},
+				Edges:      []graph.Edge{{From: "gw", To: "api", Count: 1, Provenance: graph.ProvenanceObservedParent}},
+			})
+		case "/v1/spans":
+			writeTestJSON(w, map[string]any{
+				"spans": []ingest.Span{{
+					TraceID:      "aa",
+					SpanID:       "01",
+					ServiceName:  "api",
+					Kind:         "server",
+					HTTPMethod:   http.MethodGet,
+					HTTPRoute:    "/v1/foo",
+					CodeFunction: "Hello",
+					CodeFile:     "hello.go",
+				}},
+			})
+		case "/v1/source", "/v1/locate":
+			usedAPISource.Store(true)
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errBuf strings.Builder
+	err := RunObserve(t.Context(), []string{"-api", srv.URL, "-dir", dir, "-traces", "20"}, &out, &errBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedAPISource.Load() {
+		t.Fatal("fetched API source")
+	}
+	got := out.String()
+	if !strings.Contains(got, "module=example.com/app") || !strings.Contains(got, "origin=cwd") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "bind  api  Hello") {
+		t.Fatalf("missing local bind:\n%s", got)
+	}
+	if !strings.Contains(got, "gw -> api") {
+		t.Fatalf("missing hop:\n%s", got)
+	}
+}
+
+func TestRunReplayWorkloadFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "w.json")
+	raw := `{"steps":[{"method":"POST","path":"/v1/foo","body":{"ok":true}}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var method atomic.Value
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method.Store(r.Method + " " + r.URL.Path)
+		writeReplayJSON(w, map[string]any{"ok": true})
+	}))
+	t.Cleanup(gw.Close)
+	var out strings.Builder
+	err := RunReplay(t.Context(), []string{"-base", gw.URL, "-patch", gw.URL, "-workload", path}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method.Load() != "POST /v1/foo" {
+		t.Fatalf("method=%v", method.Load())
+	}
+	got := out.String()
+	if !strings.Contains(got, "POST /v1/foo") || !strings.Contains(got, "provenance workload_file") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "verdict=pass") {
+		t.Fatalf("must not report pass: %s", got)
+	}
+}
+
+func TestRunReplayFixtureAndWorkloadConflict(t *testing.T) {
+	t.Parallel()
+	err := RunReplay(t.Context(), []string{
+		"-base", "http://127.0.0.1:18180",
+		"-patch", "http://127.0.0.1:18280",
+		"-fixture",
+		"-workload", "w.json",
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("%v", err)
 	}
 }

@@ -48,7 +48,7 @@ help:
 		'  make replay-eval   Replay, latency, and fault tests (no fake pass)' \
 		'  make plan-eval     Experiment plan, execute, and evidence-report tests (no fake pass)' \
 		'  make runs-eval     Persist experiment runs in the control plane (no fake pass)' \
-		'  make attach-eval   Cwd-native impact and span-derived GET replay (no fixture lock)' \
+		'  make attach-eval   Cwd-native observe/impact and span-derived GET replay' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -133,9 +133,9 @@ runs-eval:
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunExperimentRecords|TestRunRuns|TestRunHelp'
 
 attach-eval:
-	$(GO) test -race -count=1 ./internal/replay -run 'TestFromSpans|TestShopFixture'
+	$(GO) test -race -count=1 ./internal/replay -run 'TestFromSpans|TestShopFixture|TestReadFile'
 	$(GO) test -race -count=1 ./internal/api -run 'TestListSpans'
-	$(GO) test -race -count=1 ./internal/cli -run 'TestRunImpact|TestLoadTarget|TestReportFromLocal|TestRunReplay'
+	$(GO) test -race -count=1 ./internal/cli -run 'TestRunImpact|TestLoadTarget|TestReportFromLocal|TestRunReplay|TestRunObserve'
 
 fmt:
 	$(GO) fmt ./...
