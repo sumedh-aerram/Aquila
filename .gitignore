@@ -41,7 +41,6 @@ vendor/
 /web/
 /deploy/terraform/
 /deploy/kubernetes/
-/internal/cas/
 /internal/traces/
 /internal/artifacts/
 /internal/cache/

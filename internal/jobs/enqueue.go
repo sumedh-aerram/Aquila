@@ -155,6 +155,29 @@ func applyCommit(t *Task, attempt string, result plan.StepResult, fail string) e
 	return nil
 }
 
+func applyHeartbeat(t *Task, attempt, workerID string, now time.Time) error {
+	if t.State != StateLeased {
+		return ErrNotLeased
+	}
+	if t.AttemptID != attempt || t.WorkerID != workerID {
+		return ErrStaleAttempt
+	}
+	t.LeaseUntil = now.Add(leaseTTL)
+	return nil
+}
+
+func countLeased(jobs []Job, workerID string) int {
+	n := 0
+	for _, j := range jobs {
+		for _, t := range j.Tasks {
+			if t.State == StateLeased && t.WorkerID == workerID {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func requeue(t *Task, now time.Time) bool {
 	if t.State != StateLeased {
 		return false

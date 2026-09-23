@@ -113,16 +113,20 @@ func (m *Memory) requeueExpiredLocked(now time.Time) int {
 }
 
 // Lease implements Store.
-func (m *Memory) Lease(ctx context.Context, workerID string, now time.Time) (Lease, error) {
+func (m *Memory) Lease(ctx context.Context, w Worker, now time.Time) (Lease, error) {
 	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
-	if workerID == "" {
-		return Lease{}, fmt.Errorf("jobs: worker id required")
+	workerID, err := w.id()
+	if err != nil {
+		return Lease{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_ = m.requeueExpiredLocked(now)
+	if countLeased(m.jobs(), workerID) >= w.slots() {
+		return Lease{}, ErrCapacity
+	}
 	for _, id := range m.order {
 		job := m.byID[id]
 		for i := range job.Tasks {
@@ -147,6 +151,44 @@ func (m *Memory) Lease(ctx context.Context, workerID string, now time.Time) (Lea
 		}
 	}
 	return Lease{}, ErrNoReady
+}
+
+func (m *Memory) jobs() []Job {
+	out := make([]Job, 0, len(m.order))
+	for _, id := range m.order {
+		out = append(out, m.byID[id])
+	}
+	return out
+}
+
+// Heartbeat implements Store.
+func (m *Memory) Heartbeat(ctx context.Context, taskID, attemptID, workerID string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tid, ok := normalizeID(taskID)
+	if !ok {
+		return fmt.Errorf("jobs: invalid id")
+	}
+	aid, ok := normalizeID(attemptID)
+	if !ok {
+		return fmt.Errorf("jobs: invalid attempt")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, job := range m.byID {
+		for i := range job.Tasks {
+			if job.Tasks[i].ID != tid {
+				continue
+			}
+			if err := applyHeartbeat(&job.Tasks[i], aid, workerID, now); err != nil {
+				return err
+			}
+			m.byID[id] = job
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 // Commit implements Store.

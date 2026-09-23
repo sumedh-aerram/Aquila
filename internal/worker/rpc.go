@@ -19,7 +19,18 @@ const serviceName = "aquila.worker.v1.Worker"
 // LeaseRequest is a worker claim.
 type LeaseRequest struct {
 	WorkerID string `json:"worker_id"`
+	Slots    int    `json:"slots,omitempty"`
 }
+
+// HeartbeatRequest extends a lease. Attempt must match.
+type HeartbeatRequest struct {
+	WorkerID string `json:"worker_id"`
+	TaskID   string `json:"task_id"`
+	Attempt  string `json:"attempt"`
+}
+
+// HeartbeatReply is an empty success.
+type HeartbeatReply struct{}
 
 // LeaseReply is one leased task, or empty.
 type LeaseReply struct {
@@ -60,6 +71,7 @@ func Register(s *grpc.Server, store jobs.Store) {
 		HandlerType: (*workerServer)(nil),
 		Methods: []grpc.MethodDesc{
 			{MethodName: "Lease", Handler: leaseHandler},
+			{MethodName: "Heartbeat", Handler: heartbeatHandler},
 			{MethodName: "Commit", Handler: commitHandler},
 		},
 		Streams: []grpc.StreamDesc{},
@@ -68,6 +80,7 @@ func Register(s *grpc.Server, store jobs.Store) {
 
 type workerServer interface {
 	Lease(ctx context.Context, req *LeaseRequest) (*LeaseReply, error)
+	Heartbeat(ctx context.Context, req *HeartbeatRequest) (*HeartbeatReply, error)
 	Commit(ctx context.Context, req *CommitRequest) (*CommitReply, error)
 }
 
@@ -76,14 +89,29 @@ func (g *GRPC) Lease(ctx context.Context, req *LeaseRequest) (*LeaseReply, error
 	if g.store == nil {
 		return nil, status.Error(codes.Unavailable, "jobs unavailable")
 	}
-	lease, err := g.store.Lease(ctx, req.WorkerID, nowUTC())
+	lease, err := g.store.Lease(ctx, jobs.Worker{ID: req.WorkerID, Slots: req.Slots}, nowUTC())
 	if err != nil {
-		if errors.Is(err, jobs.ErrNoReady) {
+		if errors.Is(err, jobs.ErrNoReady) || errors.Is(err, jobs.ErrCapacity) {
 			return &LeaseReply{Empty: true}, nil
 		}
 		return nil, status.Error(codes.Internal, "lease failed")
 	}
 	return &LeaseReply{Job: lease.Job, Task: lease.Task, Attempt: lease.Attempt, N: lease.N}, nil
+}
+
+// Heartbeat implements workerServer.
+func (g *GRPC) Heartbeat(ctx context.Context, req *HeartbeatRequest) (*HeartbeatReply, error) {
+	if g.store == nil {
+		return nil, status.Error(codes.Unavailable, "jobs unavailable")
+	}
+	err := g.store.Heartbeat(ctx, req.TaskID, req.Attempt, req.WorkerID, nowUTC())
+	if err != nil {
+		if errors.Is(err, jobs.ErrStaleAttempt) || errors.Is(err, jobs.ErrNotLeased) || errors.Is(err, jobs.ErrNotFound) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+		return nil, status.Error(codes.Internal, "heartbeat failed")
+	}
+	return &HeartbeatReply{}, nil
 }
 
 // Commit implements workerServer.
@@ -115,6 +143,20 @@ func leaseHandler(srv any, ctx context.Context, dec func(any) error, interceptor
 	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: "/" + serviceName + "/Lease"}
 	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
 		return srv.(workerServer).Lease(ctx, req.(*LeaseRequest))
+	})
+}
+
+func heartbeatHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(HeartbeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(workerServer).Heartbeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: "/" + serviceName + "/Heartbeat"}
+	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
+		return srv.(workerServer).Heartbeat(ctx, req.(*HeartbeatRequest))
 	})
 }
 

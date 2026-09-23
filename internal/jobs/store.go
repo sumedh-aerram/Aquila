@@ -24,12 +24,14 @@ const (
 	StateFailed    = "failed"
 	StateSkipped   = "skipped"
 
-	idLen       = 16
-	leaseTTL    = 30 * time.Second
-	maxSteps    = 20
-	maxBody     = 8 << 10
-	DefaultList = 20
-	MaxList     = 50
+	idLen        = 16
+	leaseTTL     = 15 * time.Second
+	DefaultSlots = 1
+	MaxSlots     = 8
+	maxSteps     = 20
+	maxBody      = 8 << 10
+	DefaultList  = 20
+	MaxList      = 50
 )
 
 var (
@@ -41,6 +43,8 @@ var (
 	ErrNotLeased = errors.New("jobs: not leased")
 	// ErrNoReady is returned when Lease finds no READY executable task.
 	ErrNoReady = errors.New("jobs: no ready task")
+	// ErrCapacity is returned when a worker already holds its slot limit.
+	ErrCapacity = errors.New("jobs: worker at capacity")
 )
 
 // Step is one operator-supplied request stored for a worker. Bodies are not
@@ -88,12 +92,12 @@ type Job struct {
 
 // CreateOpts is the input for enqueueing a DAG.
 type CreateOpts struct {
-	Baseline    string
-	Patch       string
-	BaselineSHA string
-	Dirty       bool
-	Workload    replay.Workload
-	Plan        plan.DAG
+	Baseline    string          `json:"baseline"`
+	Patch       string          `json:"patch"`
+	BaselineSHA string          `json:"baseline_sha,omitempty"`
+	Dirty       bool            `json:"dirty,omitempty"`
+	Workload    replay.Workload `json:"workload"`
+	Plan        plan.DAG        `json:"plan"`
 }
 
 // Lease is a worker claim on one executable task.
@@ -105,12 +109,36 @@ type Lease struct {
 	Attempt string
 }
 
+// Worker is one claimant for READY tasks. Slots defaults to 1.
+type Worker struct {
+	ID    string
+	Slots int
+}
+
+func (w Worker) id() (string, error) {
+	if strings.TrimSpace(w.ID) == "" {
+		return "", fmt.Errorf("jobs: worker id required")
+	}
+	return w.ID, nil
+}
+
+func (w Worker) slots() int {
+	if w.Slots < 1 {
+		return DefaultSlots
+	}
+	if w.Slots > MaxSlots {
+		return MaxSlots
+	}
+	return w.Slots
+}
+
 // Store persists experiment DAGs.
 type Store interface {
 	Create(ctx context.Context, opts CreateOpts) (Job, error)
 	Get(ctx context.Context, id string) (Job, error)
 	List(ctx context.Context, limit int) ([]Job, error)
-	Lease(ctx context.Context, workerID string, now time.Time) (Lease, error)
+	Lease(ctx context.Context, w Worker, now time.Time) (Lease, error)
+	Heartbeat(ctx context.Context, taskID, attemptID, workerID string, now time.Time) error
 	Commit(ctx context.Context, taskID, attemptID string, result plan.StepResult, fail string) (Task, error)
 	RequeueExpired(ctx context.Context, now time.Time) (int, error)
 }

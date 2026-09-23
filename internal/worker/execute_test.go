@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/sumedhaerram/aquila/internal/action"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/jobs"
 	"github.com/sumedhaerram/aquila/internal/plan"
@@ -28,7 +29,7 @@ func TestExecuteBehaviorMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease, err := st.Lease(t.Context(), "w1", nowUTC())
+	lease, err := st.Lease(t.Context(), jobs.Worker{ID: "w1"}, nowUTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +52,44 @@ func TestExecuteBehaviorMatch(t *testing.T) {
 	}
 	if got.Validated {
 		t.Fatal("validated")
+	}
+}
+
+func TestExecuteCacheHit(t *testing.T) {
+	t.Parallel()
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(gw.Close)
+	st := jobs.NewMemory()
+	if _, err := st.Create(t.Context(), jobs.CreateOpts{
+		Baseline: gw.URL,
+		Patch:    gw.URL,
+		Workload: replay.Workload{Steps: []replay.Step{{Method: http.MethodGet, Path: "/"}}},
+		Plan:     mustPlan(t),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := action.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := st.Lease(t.Context(), jobs.Worker{ID: "w1"}, nowUTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := ExecuteWith(t.Context(), lease, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Close()
+	second, err := ExecuteWith(t.Context(), lease, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Verdict != second.Verdict || second.Verdict != replay.VerdictMatch {
+		t.Fatalf("%+v %+v", first, second)
 	}
 }
 

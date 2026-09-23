@@ -115,6 +115,12 @@ WITH recent AS (
     SELECT trace_id
       FROM aquila.spans
      GROUP BY trace_id
+    HAVING bool_or(
+        COALESCE(NULLIF(http_route, ''), span_name) NOT IN (
+            '/healthz', '/livez', '/readyz', '/health',
+            'GET /healthz', 'HEAD /healthz'
+        )
+    )
      ORDER BY MAX(start_time) DESC
      LIMIT $1
 )
@@ -149,7 +155,10 @@ func (p *Postgres) ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, 
 		}
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return SelectWindow(out, maxTraces), nil
 }
 
 var _ Store = (*Postgres)(nil)

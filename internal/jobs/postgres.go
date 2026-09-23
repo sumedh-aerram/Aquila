@@ -127,9 +127,10 @@ func (p *Postgres) RequeueExpired(ctx context.Context, now time.Time) (int, erro
 }
 
 // Lease implements Store.
-func (p *Postgres) Lease(ctx context.Context, workerID string, now time.Time) (Lease, error) {
-	if workerID == "" {
-		return Lease{}, fmt.Errorf("jobs: worker id required")
+func (p *Postgres) Lease(ctx context.Context, w Worker, now time.Time) (Lease, error) {
+	workerID, err := w.id()
+	if err != nil {
+		return Lease{}, err
 	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -139,32 +140,19 @@ func (p *Postgres) Lease(ctx context.Context, workerID string, now time.Time) (L
 	if _, err := expireTx(ctx, tx, now); err != nil {
 		return Lease{}, err
 	}
-	rows, err := tx.Query(ctx, lockJobsSQL)
+	found, err := lockJobs(ctx, tx)
 	if err != nil {
-		return Lease{}, fmt.Errorf("jobs: %w", err)
+		return Lease{}, err
 	}
-	type row struct {
-		id  string
-		job Job
+	all := make([]Job, 0, len(found))
+	for _, r := range found {
+		all = append(all, r.job)
 	}
-	var found []row
-	for rows.Next() {
-		var id string
-		var raw []byte
-		if err := rows.Scan(&id, &raw); err != nil {
-			rows.Close()
+	if countLeased(all, workerID) >= w.slots() {
+		if err := tx.Commit(ctx); err != nil {
 			return Lease{}, fmt.Errorf("jobs: %w", err)
 		}
-		job, err := decodeJob(raw)
-		if err != nil {
-			rows.Close()
-			return Lease{}, err
-		}
-		found = append(found, row{id: id, job: job})
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return Lease{}, err
+		return Lease{}, ErrCapacity
 	}
 	for _, r := range found {
 		job := r.job
@@ -196,6 +184,74 @@ func (p *Postgres) Lease(ctx context.Context, workerID string, now time.Time) (L
 		return Lease{}, fmt.Errorf("jobs: %w", err)
 	}
 	return Lease{}, ErrNoReady
+}
+
+type jobRow struct {
+	id  string
+	job Job
+}
+
+func lockJobs(ctx context.Context, tx pgx.Tx) ([]jobRow, error) {
+	rows, err := tx.Query(ctx, lockJobsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: %w", err)
+	}
+	defer rows.Close()
+	var found []jobRow
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, fmt.Errorf("jobs: %w", err)
+		}
+		job, err := decodeJob(raw)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, jobRow{id: id, job: job})
+	}
+	return found, rows.Err()
+}
+
+// Heartbeat implements Store.
+func (p *Postgres) Heartbeat(ctx context.Context, taskID, attemptID, workerID string, now time.Time) error {
+	tid, ok := normalizeID(taskID)
+	if !ok {
+		return fmt.Errorf("jobs: invalid id")
+	}
+	aid, ok := normalizeID(attemptID)
+	if !ok {
+		return fmt.Errorf("jobs: invalid attempt")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("jobs: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	found, err := lockJobs(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, r := range found {
+		job := r.job
+		for i := range job.Tasks {
+			if job.Tasks[i].ID != tid {
+				continue
+			}
+			if err := applyHeartbeat(&job.Tasks[i], aid, workerID, now); err != nil {
+				return err
+			}
+			raw, err := json.Marshal(job)
+			if err != nil {
+				return fmt.Errorf("jobs: %w", err)
+			}
+			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw); err != nil {
+				return fmt.Errorf("jobs: %w", err)
+			}
+			return tx.Commit(ctx)
+		}
+	}
+	return ErrNotFound
 }
 
 // Commit implements Store.

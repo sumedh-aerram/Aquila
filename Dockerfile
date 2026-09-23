@@ -22,5 +22,5 @@ RUN apk add --no-cache wget \
 COPY --from=build --chown=65532:65532 /out/aquila-server /usr/local/bin/aquila-server
 COPY --from=build --chown=65532:65532 /out/source.json /etc/aquila/source.json
 USER aquila
-EXPOSE 8080
+EXPOSE 8080 8091
 ENTRYPOINT ["/usr/local/bin/aquila-server"]

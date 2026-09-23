@@ -163,6 +163,8 @@ func commandTimeout(args []string) time.Duration {
 		return 0
 	case "worker":
 		return 0
+	case "job":
+		return time.Minute
 	case "replay":
 		n := flagN(args[1:], 1)
 		return capReplayTimeout(n)

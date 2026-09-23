@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/sumedhaerram/aquila/internal/rewrite"
 )
@@ -33,11 +35,22 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	out, err := rewrite.D1(*dir, rep.Files)
+	out, err := rewrite.D1(patchModule(ctx, *dir), rep.Files)
 	if err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}
 	_, _ = stdout.Write(out)
 	writef(stdout, "not applied. not validated. candidate only.\n")
 	return nil
+}
+
+func patchModule(ctx context.Context, dir string) string {
+	if loadTargetSource(ctx, dir) != nil {
+		return dir
+	}
+	shop := filepath.Join(dir, "examples", "shop")
+	if _, err := os.Stat(filepath.Join(shop, filepath.FromSlash("internal/payment/handler.go"))); err == nil {
+		return shop
+	}
+	return dir
 }

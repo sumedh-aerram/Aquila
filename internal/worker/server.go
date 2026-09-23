@@ -23,14 +23,23 @@ func Server(store jobs.Store) *grpc.Server {
 	return s
 }
 
-// ListenAndServe serves the worker protocol until ctx is cancelled.
-func ListenAndServe(ctx context.Context, addr string, store jobs.Store) error {
+// Listen binds the worker gRPC address. Bind failures are returned immediately
+// so the API process cannot look healthy with a dead worker port.
+func Listen(addr string) (net.Listener, error) {
 	if addr == "" {
-		return fmt.Errorf("worker: listen addr required")
+		return nil, fmt.Errorf("worker: listen addr required")
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("worker: %w", err)
+		return nil, fmt.Errorf("worker: %w", err)
+	}
+	return ln, nil
+}
+
+// Serve serves the worker protocol on ln until ctx is cancelled.
+func Serve(ctx context.Context, ln net.Listener, store jobs.Store) error {
+	if ln == nil {
+		return fmt.Errorf("worker: listener required")
 	}
 	s := Server(store)
 	errCh := make(chan error, 1)
@@ -45,6 +54,15 @@ func ListenAndServe(ctx context.Context, addr string, store jobs.Store) error {
 	}
 }
 
+// ListenAndServe binds addr and serves until ctx is cancelled.
+func ListenAndServe(ctx context.Context, addr string, store jobs.Store) error {
+	ln, err := Listen(addr)
+	if err != nil {
+		return err
+	}
+	return Serve(ctx, ln, store)
+}
+
 // Dial returns a gRPC client for addr using the JSON worker codec.
 func Dial(addr string) (*grpc.ClientConn, error) {
 	if addr == "" {
@@ -55,12 +73,25 @@ func Dial(addr string) (*grpc.ClientConn, error) {
 
 // ClientLease leases one task over gRPC.
 func ClientLease(ctx context.Context, conn grpc.ClientConnInterface, workerID string) (*LeaseReply, error) {
+	return ClientLeaseSlots(ctx, conn, workerID, jobs.DefaultSlots)
+}
+
+// ClientLeaseSlots leases one task with a slot limit.
+func ClientLeaseSlots(ctx context.Context, conn grpc.ClientConnInterface, workerID string, slots int) (*LeaseReply, error) {
 	var out LeaseReply
-	err := conn.Invoke(ctx, "/"+serviceName+"/Lease", &LeaseRequest{WorkerID: workerID}, &out, contentJSON)
+	err := conn.Invoke(ctx, "/"+serviceName+"/Lease", &LeaseRequest{WorkerID: workerID, Slots: slots}, &out, contentJSON)
 	if err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ClientHeartbeat extends a lease.
+func ClientHeartbeat(ctx context.Context, conn grpc.ClientConnInterface, workerID, taskID, attempt string) error {
+	var out HeartbeatReply
+	return conn.Invoke(ctx, "/"+serviceName+"/Heartbeat", &HeartbeatRequest{
+		WorkerID: workerID, TaskID: taskID, Attempt: attempt,
+	}, &out, contentJSON)
 }
 
 // ClientCommit commits a leased task over gRPC.
@@ -75,7 +106,12 @@ func ClientCommit(ctx context.Context, conn grpc.ClientConnInterface, req *Commi
 
 // RemoteOnce leases, executes, and commits via gRPC.
 func RemoteOnce(ctx context.Context, conn grpc.ClientConnInterface, workerID string) error {
-	reply, err := ClientLease(ctx, conn, workerID)
+	return RemoteOnceSlots(ctx, conn, workerID, jobs.DefaultSlots)
+}
+
+// RemoteOnceSlots leases with a slot limit.
+func RemoteOnceSlots(ctx context.Context, conn grpc.ClientConnInterface, workerID string, slots int) error {
+	reply, err := ClientLeaseSlots(ctx, conn, workerID, slots)
 	if err != nil {
 		return err
 	}
@@ -83,7 +119,22 @@ func RemoteOnce(ctx context.Context, conn grpc.ClientConnInterface, workerID str
 		return jobs.ErrNoReady
 	}
 	lease := jobs.Lease{Job: reply.Job, Task: reply.Task, N: reply.N, Attempt: reply.Attempt}
+	beatCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		ticker := time.NewTicker(heartbeatEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-beatCtx.Done():
+				return
+			case <-ticker.C:
+				_ = ClientHeartbeat(beatCtx, conn, workerID, lease.Task.ID, lease.Attempt)
+			}
+		}
+	}()
 	res, execErr := Execute(ctx, lease)
+	cancel()
 	fail := ""
 	if execErr != nil {
 		fail = execErr.Error()

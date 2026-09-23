@@ -40,14 +40,15 @@ func TestStaleAttemptCannotCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	a, err := st.Lease(t.Context(), "worker-a", now)
+	a, err := st.Lease(t.Context(), Worker{ID: "worker-a"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RequeueExpired(t.Context(), now.Add(time.Minute)); err != nil {
+	expired := now.Add(leaseTTL + time.Second)
+	if _, err := st.RequeueExpired(t.Context(), expired); err != nil {
 		t.Fatal(err)
 	}
-	b, err := st.Lease(t.Context(), "worker-b", now.Add(time.Minute))
+	b, err := st.Lease(t.Context(), Worker{ID: "worker-b"}, expired)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +78,95 @@ func TestStaleAttemptCannotCommit(t *testing.T) {
 func TestLeaseEmpty(t *testing.T) {
 	t.Parallel()
 	st := NewMemory()
-	_, err := st.Lease(t.Context(), "w", time.Now())
+	_, err := st.Lease(t.Context(), Worker{ID: "w"}, time.Now())
 	if err != ErrNoReady {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestTwoWorkersLeaseDistinctTasks(t *testing.T) {
+	t.Parallel()
+	st := NewMemory()
+	if _, err := st.Create(t.Context(), sampleOpts(t)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	a, err := st.Lease(t.Context(), Worker{ID: "a", Slots: 1}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Lease(t.Context(), Worker{ID: "a", Slots: 1}, now)
+	if err != ErrCapacity {
+		t.Fatalf("want capacity, got %v", err)
+	}
+	b, err := st.Lease(t.Context(), Worker{ID: "b", Slots: 1}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Task.ID == b.Task.ID {
+		t.Fatal("workers must not share a task")
+	}
+	if a.Attempt == b.Attempt {
+		t.Fatal("attempts must differ")
+	}
+}
+
+func TestHeartbeatExtendsLease(t *testing.T) {
+	t.Parallel()
+	st := NewMemory()
+	if _, err := st.Create(t.Context(), sampleOpts(t)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	a, err := st.Lease(t.Context(), Worker{ID: "a"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Heartbeat(t.Context(), a.Task.ID, a.Attempt, "a", now.Add(leaseTTL-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RequeueExpired(t.Context(), now.Add(leaseTTL)); err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.Lease(t.Context(), Worker{ID: "b"}, now.Add(leaseTTL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Task.ID == a.Task.ID {
+		t.Fatal("heartbeat must keep worker a's task")
+	}
+	if _, err := st.RequeueExpired(t.Context(), now.Add(2*leaseTTL+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.Lease(t.Context(), Worker{ID: "c"}, now.Add(2*leaseTTL+time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Task.ID != a.Task.ID {
+		t.Fatalf("want requeued task %s, got %s", a.Task.ID, c.Task.ID)
+	}
+	if c.Attempt == a.Attempt {
+		t.Fatal("attempts must differ after expiry")
+	}
+	res := plan.StepResult{ID: a.Task.PlanID, Kind: a.Task.Kind, Verdict: replay.VerdictMatch}
+	if _, err := st.Commit(t.Context(), a.Task.ID, a.Attempt, res, ""); err == nil {
+		t.Fatal("stale A after expiry must be rejected")
+	}
+}
+
+func TestControllerRestartKeepsJob(t *testing.T) {
+	t.Parallel()
+	st := NewMemory()
+	job, err := st.Create(t.Context(), sampleOpts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != job.ID || got.Validated {
+		t.Fatalf("%+v", got)
 	}
 }
 

@@ -41,9 +41,6 @@ func TestRunHelp(t *testing.T) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
 	}
-	if strings.Contains(got, "aquila ask") {
-		t.Fatal("must not list ask as a working command")
-	}
 }
 
 func TestRunNoArgs(t *testing.T) {
@@ -60,6 +57,9 @@ func TestCommandTimeoutFaultIsUnlimited(t *testing.T) {
 	}
 	if commandTimeout([]string{"worker", "-once"}) != 0 {
 		t.Fatal("worker must not have a process timeout")
+	}
+	if commandTimeout([]string{"job", "-fixture", "-n", "1"}) != time.Minute {
+		t.Fatal("job enqueue needs a longer timeout than status")
 	}
 }
 

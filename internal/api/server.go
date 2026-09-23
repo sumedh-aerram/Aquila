@@ -94,18 +94,25 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 // ListenAndServe serves until the context is cancelled, then shuts down cleanly.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	errCh := make(chan error, 1)
-	go func() {
-		s.log.Info("listening", "addr", s.cfg.Server.Addr, "version", version.Version)
-		errCh <- s.http.ListenAndServe()
-	}()
+	if s.jobs != nil {
+		go jobs.Loop(ctx, s.jobs, time.Second)
+	}
 	if s.jobs != nil && s.cfg.Worker.Addr != "" {
+		ln, err := worker.Listen(s.cfg.Worker.Addr)
+		if err != nil {
+			return err
+		}
 		go func() {
 			s.log.Info("worker grpc", "addr", s.cfg.Worker.Addr)
-			if err := worker.ListenAndServe(ctx, s.cfg.Worker.Addr, s.jobs); err != nil {
+			if err := worker.Serve(ctx, ln, s.jobs); err != nil {
 				s.log.Error("worker grpc", "err", err)
 			}
 		}()
 	}
+	go func() {
+		s.log.Info("listening", "addr", s.cfg.Server.Addr, "version", version.Version)
+		errCh <- s.http.ListenAndServe()
+	}()
 
 	select {
 	case <-ctx.Done():

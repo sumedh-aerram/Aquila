@@ -20,6 +20,7 @@ func RunWorker(ctx context.Context, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	addr := fs.String("grpc", envWorker(), "worker gRPC address")
 	id := fs.String("id", "aquila-worker", "worker id")
+	slots := fs.Int("slots", jobs.DefaultSlots, "max concurrent leased tasks")
 	once := fs.Bool("once", false, "lease at most one task and exit")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: worker: %w", err)
@@ -36,8 +37,8 @@ func RunWorker(ctx context.Context, args []string, stdout io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := worker.RemoteOnce(ctx, conn, *id)
-		if errors.Is(err, jobs.ErrNoReady) {
+		err := worker.RemoteOnceSlots(ctx, conn, *id, *slots)
+		if errors.Is(err, jobs.ErrNoReady) || errors.Is(err, jobs.ErrCapacity) {
 			if *once {
 				writef(stdout, "worker   idle\n")
 				return nil

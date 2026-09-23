@@ -991,6 +991,32 @@ func TestRunPatchWritesCandidate(t *testing.T) {
 	}
 }
 
+func TestRunPatchFromControlPlaneDir(t *testing.T) {
+	t.Parallel()
+	root := filepath.Clean(filepath.Join("..", ".."))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/impact":
+			writeTestJSON(w, impact.Report{Files: []string{"internal/payment/handler.go"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	raw, err := os.ReadFile(filepath.Join("..", "pair", "testdata", "d1.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	err = RunPatch(t.Context(), []string{"-api", srv.URL, "-dir", root}, bytes.NewReader(raw), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "svcclient.Shared()") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
 func TestRunJobRequiresGateways(t *testing.T) {
 	t.Parallel()
 	err := RunJob(t.Context(), []string{"-fixture"}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)

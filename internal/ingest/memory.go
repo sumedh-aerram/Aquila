@@ -90,12 +90,13 @@ func (m *Memory) ListTraceWindow(_ context.Context, maxTraces int) ([]Span, erro
 		return infos[i].last.After(infos[j].last)
 	})
 	n := normalizeTraceWindow(maxTraces)
-	if n > len(infos) {
-		n = len(infos)
-	}
 	out := make([]Span, 0)
-	for _, info := range infos[:n] {
+	kept := 0
+	for _, info := range infos {
 		spans := byTrace[info.id]
+		if probeOnly(spans) {
+			continue
+		}
 		sort.Slice(spans, func(i, j int) bool {
 			if spans[i].StartTime.Equal(spans[j].StartTime) {
 				return spans[i].SpanID < spans[j].SpanID
@@ -103,8 +104,12 @@ func (m *Memory) ListTraceWindow(_ context.Context, maxTraces int) ([]Span, erro
 			return spans[i].StartTime.Before(spans[j].StartTime)
 		})
 		out = append(out, spans...)
-		if len(out) >= maxWindowSpans {
-			return out[:maxWindowSpans], nil
+		kept++
+		if kept >= n || len(out) >= maxWindowSpans {
+			if len(out) > maxWindowSpans {
+				return out[:maxWindowSpans], nil
+			}
+			return out, nil
 		}
 	}
 	return out, nil
