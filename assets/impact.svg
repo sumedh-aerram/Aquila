@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 520" role="img" aria-labelledby="title desc">
+  <title id="title">aquila impact on a payment-handler diff</title>
+  <desc id="desc">Live output: 1 direct function (chargeProcessor), 1 typed caller (authorize), 3 runtime findings including gateway to checkout to payment to processor, and chargeProcessor left unobserved because locate did not bind it.</desc>
+  <rect width="880" height="520" fill="none"/>
+  <rect x="16" y="16" width="848" height="488" rx="14" fill="#0d1117" stroke="#30363d"/>
+  <rect x="16" y="16" width="848" height="44" rx="14" fill="#161b22"/>
+  <rect x="16" y="46" width="848" height="14" fill="#161b22"/>
+  <circle cx="42" cy="38" r="6" fill="#ff5f56"/>
+  <circle cx="62" cy="38" r="6" fill="#ffbd2e"/>
+  <circle cx="82" cy="38" r="6" fill="#27c93f"/>
+  <text x="110" y="42" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">aquila impact</text>
+  <text x="840" y="42" text-anchor="end" fill="#484f58" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="12">shop | -service gateway</text>
+
+  <text x="40" y="88" fill="#7ee787" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">$</text>
+  <text x="58" y="88" fill="#c9d1d9" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">aquila impact -f d1.diff -traces 20 -service gateway</text>
+
+  <text x="88" y="142" text-anchor="middle" fill="#f0883e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="32" font-weight="700">1</text>
+  <text x="88" y="164" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">direct</text>
+  <text x="248" y="142" text-anchor="middle" fill="#58a6ff" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="32" font-weight="700">1</text>
+  <text x="248" y="164" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">likely</text>
+  <text x="408" y="142" text-anchor="middle" fill="#3fb950" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="32" font-weight="700">3</text>
+  <text x="408" y="164" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">runtime</text>
+  <text x="568" y="142" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="32" font-weight="700">1</text>
+  <text x="568" y="164" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">unobserved</text>
+  <text x="728" y="142" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="32" font-weight="700">1</text>
+  <text x="728" y="164" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">files</text>
+
+  <line x1="40" y1="184" x2="840" y2="184" stroke="#21262d"/>
+
+  <rect x="40" y="204" width="4" height="44" rx="2" fill="#f0883e"/>
+  <text x="56" y="222" fill="#f0883e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="12" font-weight="700">direct</text>
+  <text x="56" y="242" fill="#c9d1d9" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">chargeProcessor   internal/payment/handler.go:144   changed_lines   diff</text>
+
+  <rect x="40" y="260" width="4" height="44" rx="2" fill="#58a6ff"/>
+  <text x="56" y="278" fill="#58a6ff" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="12" font-weight="700">likely</text>
+  <text x="56" y="298" fill="#c9d1d9" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">authorize          internal/payment/handler.go:58    caller          types</text>
+
+  <rect x="40" y="316" width="4" height="88" rx="2" fill="#3fb950"/>
+  <text x="56" y="334" fill="#3fb950" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="12" font-weight="700">runtime</text>
+  <text x="56" y="354" fill="#c9d1d9" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">path  gateway -&gt; checkout -&gt; payment                         observed_parent</text>
+  <text x="56" y="374" fill="#c9d1d9" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">path  gateway -&gt; checkout -&gt; payment -&gt; processor            observed_parent</text>
+  <text x="56" y="394" fill="#c9d1d9" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">payment  authorize  bound_span                               code_attrs</text>
+
+  <rect x="40" y="416" width="4" height="44" rx="2" fill="#6e7681"/>
+  <text x="56" y="434" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="12" font-weight="700">unobserved</text>
+  <text x="56" y="454" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="13">chargeProcessor   internal/payment/handler.go        no_runtime_bind locate</text>
+
+  <text x="56" y="486" fill="#484f58" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">Empty stays empty. chargeProcessor did not bind a span, so Aquila does not invent a hop.</text>
+</svg>
