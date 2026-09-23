@@ -86,7 +86,7 @@ Usage:
 Commands:
   status      Control-plane health, ready, version
   observe     Runtime hops, source summary, span-to-source binds
-  impact      Blast radius of a unified diff (direct, likely, runtime, unobserved)
+  impact      Blast radius of local git changes (or a piped unified diff)
   env         Isolated baseline and patch shop trees from a diff (does not start)
   replay      Same workload against two gateways; match/differ/incomplete
   fault       Loopback reverse proxy that delays or injects a status
@@ -105,7 +105,7 @@ Commands:
 Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
   -traces int     observe/impact/plan/experiment/replay trace window (default 20, max 200)
-  -f path         impact/env/plan/experiment: diff file (default stdin); runs: import evidence JSON
+  -f path         impact/env/plan/experiment: diff file (default: git diff HEAD in -dir, else stdin)
   -shop path      env/experiment: shop module (default examples/shop)
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
   -pair path      experiment: pair parent when omitting -base/-patch (default out/env)
@@ -120,15 +120,17 @@ Flags:
   -delay dur      fault: injected delay before proxy or status
   -status int     fault: if set, return this status and do not proxy
 
-impact reads git diff on stdin. It does not apply the patch. Standing in this
-repo falls back to POST /v1/impact so a shop snapshot still maps shop diffs;
-other modules are loaded from -dir. env copies the shop and applies the diff
-only to patch. replay hits -base and -patch using GET/HEAD/OPTIONS from server
-spans (no bodies). -workload is an operator JSON file for POST and friends.
--fixture is shop smoke including POST /checkout. match is
-not a pass. p95 is withheld unless n>=20. No regression threshold. fault
-listens on loopback only; an injected 502 is a probe, not a pass. plan names
-env, behavior, latency, and (when runtime paths exist) an operator fault.
+impact reads git diff HEAD in -dir when stdin is empty (local IDE changes).
+Pipe a unified diff or pass -f to override. It does not apply the patch.
+Standing in this repo falls back to POST /v1/impact so a shop snapshot still
+maps shop diffs. A directory without go.mod is file-level impact (origin=files),
+not the shop graph. Other Go modules are loaded from -dir. env copies the shop
+and applies the diff only to patch. replay hits -base and -patch using
+GET/HEAD/OPTIONS from server spans (no bodies). -workload is an operator JSON
+file for POST and friends. -fixture is shop smoke including POST /checkout.
+match is not a pass. p95 is withheld unless n>=20. No regression threshold.
+fault listens on loopback only; an injected 502 is a probe, not a pass. plan
+names env, behavior, latency, and (when runtime paths exist) an operator fault.
 experiment executes behavior and latency; skipped operator steps are not
 a pass. omitting -base and -patch prepares the shop pair, starts compose on
 the host, waits for /healthz, then tears it down. that path does not boot a
@@ -138,7 +140,7 @@ writes evidence JSON (never validated). experiment
 also POSTs that artifact to /v1/runs when the API is up; a missing store is
 unrecorded, not a pass. report renders a file as Markdown without hitting
 gateways. runs lists stored evidence, shows one id, or imports -f. ask cites
-observed hops, binds, and optional impact tokens only. patch emits a D1
+observed hops, routes, binds, and optional impact tokens only. patch emits a D1
 candidate for examples/shop and does not write the tree. job records env as
 skipped operator and leaves behavior/latency READY for a worker. worker
 leases one READY task over gRPC, runs replay, and commits with an attempt id.

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -130,19 +131,116 @@ func TestRunImpactFallsBackForControlPlane(t *testing.T) {
 	}
 }
 
-func TestRunImpactEmptyDirFallsBackToAPI(t *testing.T) {
+func TestRunImpactMissingGoModUsesFiles(t *testing.T) {
 	t.Parallel()
-	srv := impactAPI(t, impact.Report{
-		Files:  []string{"internal/payment/handler.go"},
-		Direct: []impact.Finding{{Name: "chargeProcessor"}},
-	})
+	var posted atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/impact" {
+			posted.Store(true)
+			http.Error(w, "must not use shop snapshot", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path != "/v1/spans" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{"spans": []ingest.Span{}})
+	}))
+	t.Cleanup(srv.Close)
+	raw := `diff --git a/backend/server.py b/backend/server.py
+--- a/backend/server.py
++++ b/backend/server.py
+@@ -1,1 +1,1 @@
+-a
++b
+`
 	var out strings.Builder
-	err := RunImpact(t.Context(), []string{"-api", srv.URL, "-dir", t.TempDir()}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	err := RunImpact(t.Context(), []string{"-api", srv.URL, "-dir", t.TempDir()}, strings.NewReader(raw), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "chargeProcessor") {
-		t.Fatalf("%s", out.String())
+	if posted.Load() {
+		t.Fatal("posted to /v1/impact")
+	}
+	got := out.String()
+	if !strings.Contains(got, "origin=files") || !strings.Contains(got, "backend/server.py") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "chargeProcessor") {
+		t.Fatalf("shop leak:\n%s", got)
+	}
+}
+
+func TestRunImpactWorktree(t *testing.T) {
+	t.Parallel()
+	dir := writeModule(t, "example.com/app", "package app\n\nfunc Hello() int {\n\treturn 1\n}\n")
+	runGitInit(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package app\n\nfunc Hello() int {\n\treturn 2\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/spans" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{"spans": []ingest.Span{}})
+	}))
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	err := RunImpact(t.Context(), []string{"-api", srv.URL, "-dir", dir}, strings.NewReader(""), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "diff=worktree") || !strings.Contains(got, "Hello") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestRunObserveForeignDirNotShop(t *testing.T) {
+	t.Parallel()
+	var usedAPISource atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{
+				TraceCount: 1,
+				SpanCount:  1,
+				Services:   []graph.Service{{Name: "reroute", SpanCount: 1}},
+			})
+		case "/v1/spans":
+			writeTestJSON(w, map[string]any{
+				"spans": []ingest.Span{{
+					TraceID:     "aa",
+					SpanID:      "01",
+					ServiceName: "reroute",
+					Kind:        "server",
+					HTTPMethod:  http.MethodGet,
+					HTTPRoute:   "/api/health",
+				}},
+			})
+		case "/v1/source", "/v1/locate":
+			usedAPISource.Store(true)
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errBuf strings.Builder
+	err := RunObserve(t.Context(), []string{"-api", srv.URL, "-dir", t.TempDir(), "-traces", "20"}, &out, &errBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedAPISource.Load() {
+		t.Fatal("fetched API source")
+	}
+	got := out.String()
+	if !strings.Contains(got, "origin=none") || !strings.Contains(got, "GET /api/health") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "examples/shop") {
+		t.Fatalf("shop leak:\n%s", got)
 	}
 }
 
@@ -157,6 +255,33 @@ func writeModule(t *testing.T, module, src string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func runGitInit(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_NOSYSTEM=1",
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_AUTHOR_NAME=aquila",
+			"GIT_AUTHOR_EMAIL=aquila@test",
+			"GIT_COMMITTER_NAME=aquila",
+			"GIT_COMMITTER_EMAIL=aquila@test",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("add", ".")
+	run("-c", "user.email=aquila@test", "-c", "user.name=aquila", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init")
 }
 
 func TestRunReplayForeignGETFromSpans(t *testing.T) {
@@ -319,5 +444,40 @@ func TestRunReplayFixtureAndWorkloadConflict(t *testing.T) {
 	}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestRunAskHitsHealthRoute(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{
+				Services: []graph.Service{{Name: "reroute"}},
+			})
+		case "/v1/spans":
+			writeTestJSON(w, map[string]any{
+				"spans": []ingest.Span{{
+					TraceID:     "aa",
+					SpanID:      "01",
+					ServiceName: "reroute",
+					Kind:        "server",
+					HTTPMethod:  http.MethodGet,
+					HTTPRoute:   "/api/health",
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errBuf strings.Builder
+	err := RunAsk(t.Context(), []string{"-api", srv.URL, "-dir", t.TempDir(), "health"}, strings.NewReader(""), &out, &errBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "/api/health") {
+		t.Fatalf("%s", got)
 	}
 }

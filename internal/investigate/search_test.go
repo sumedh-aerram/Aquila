@@ -7,6 +7,23 @@ import (
 	"github.com/sumedhaerram/aquila/internal/impact"
 )
 
+func TestSearchMatchesRoute(t *testing.T) {
+	t.Parallel()
+	rep, err := Search(Input{
+		Question: "health",
+		Origin:   "none",
+		Services: []string{"reroute"},
+		Routes:   []string{"route reroute  GET /api/health"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(rep.Hits, "\n")
+	if !strings.Contains(joined, "/api/health") {
+		t.Fatalf("%v", rep.Hits)
+	}
+}
+
 func TestSearchMatchesObservedHop(t *testing.T) {
 	t.Parallel()
 	rep, err := Search(Input{

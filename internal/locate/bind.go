@@ -66,6 +66,29 @@ func Bind(g *source.Graph, spans []ingest.Span) Snapshot {
 		Unmapped: []Unmapped{},
 	}
 	if g == nil {
+		for i := range spans {
+			sp := spans[i]
+			if sp.TraceID == "" || sp.SpanID == "" {
+				continue
+			}
+			out.SpanCount++
+			reason := ReasonMissingAttrs
+			if strings.TrimSpace(sp.CodeFunction) != "" && strings.TrimSpace(sp.CodeFile) != "" {
+				reason = ReasonNoFile
+			}
+			out.UnmappedCount++
+			if len(out.Unmapped) < maxUnmappedReturned {
+				out.Unmapped = append(out.Unmapped, Unmapped{
+					TraceID:      sp.TraceID,
+					SpanID:       sp.SpanID,
+					ServiceName:  sp.ServiceName,
+					SpanName:     sp.Name,
+					CodeFunction: sp.CodeFunction,
+					CodeFile:     sp.CodeFile,
+					Reason:       reason,
+				})
+			}
+		}
 		return out
 	}
 	idx := indexSource(g)

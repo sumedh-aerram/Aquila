@@ -9,7 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/graph"
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/locate"
 	"github.com/sumedhaerram/aquila/internal/source"
 )
@@ -46,7 +48,7 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 
-	src, loc, origin, srcErr, locErr := observeJoin(ctx, c, *api, *dir, n, q)
+	src, loc, origin, spans, srcErr, locErr := observeJoin(ctx, c, *api, *dir, n, q)
 	if srcErr != nil && !unavailable(srcErr) {
 		return srcErr
 	}
@@ -55,9 +57,14 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	}
 
 	writef(stdout, "api  %s  traces=%d\n\n", c.base, n)
+	writeWorktree(stdout, ctx, *dir)
 	writeRuntime(stdout, rt)
+	writeRoutes(stdout, spans)
 	writef(stdout, "\n")
-	if srcErr != nil {
+	if origin == originNone {
+		writef(stdout, "source  not a Go module  origin=%s\n", origin)
+		writef(stdout, "  typed locate and callers need go.mod in -dir\n")
+	} else if srcErr != nil {
 		writef(stdout, "source  unavailable\n")
 		writef(stderr, "observe: source: %v\n", srcErr)
 	} else {
@@ -73,28 +80,37 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	return nil
 }
 
-func observeJoin(ctx context.Context, c *Client, api, dir string, traces int, q string) (src source.Snapshot, loc locate.Snapshot, origin string, srcErr, locErr error) {
+func observeJoin(ctx context.Context, c *Client, api, dir string, traces int, q string) (src source.Snapshot, loc locate.Snapshot, origin string, spans []ingest.Span, srcErr, locErr error) {
 	if g := loadTargetSource(ctx, dir); g != nil {
-		origin = "cwd"
+		origin = originCwd
 		src = g.Snapshot()
-		spans, err := fetchSpans(ctx, api, traces)
-		if err != nil {
-			locErr = err
-			return src, loc, origin, srcErr, locErr
+		spans, locErr = fetchSpans(ctx, api, traces)
+		if locErr != nil {
+			return src, loc, origin, spans, srcErr, locErr
 		}
 		loc = locate.Bind(g, spans)
-		return src, loc, origin, nil, nil
+		return src, loc, origin, spans, nil, nil
 	}
-	origin = "api"
-	srcErr = c.getJSON(ctx, "/v1/source", &src)
-	if srcErr != nil && !unavailable(srcErr) {
-		return src, loc, origin, srcErr, nil
+	if controlPlaneDir(dir) {
+		origin = originAPI
+		srcErr = c.getJSON(ctx, "/v1/source", &src)
+		if srcErr != nil && !unavailable(srcErr) {
+			return src, loc, origin, spans, srcErr, nil
+		}
+		locErr = c.getJSON(ctx, "/v1/locate"+q, &loc)
+		if locErr != nil && !unavailable(locErr) {
+			return src, loc, origin, spans, srcErr, locErr
+		}
+		spans, _ = fetchSpans(ctx, api, traces)
+		return src, loc, origin, spans, srcErr, locErr
 	}
-	locErr = c.getJSON(ctx, "/v1/locate"+q, &loc)
-	if locErr != nil && !unavailable(locErr) {
-		return src, loc, origin, srcErr, locErr
+	origin = originNone
+	spans, locErr = fetchSpans(ctx, api, traces)
+	if locErr != nil {
+		return src, loc, origin, spans, srcErr, locErr
 	}
-	return src, loc, origin, srcErr, locErr
+	loc = locate.Bind(nil, spans)
+	return src, loc, origin, spans, nil, nil
 }
 
 func writeRuntime(w io.Writer, rt graph.Snapshot) {
@@ -185,4 +201,47 @@ func writeLocate(w io.Writer, loc locate.Snapshot) {
 	for _, k := range keys {
 		writef(w, "    %s  %d\n", k, counts[k])
 	}
+}
+
+func writeRoutes(w io.Writer, spans []ingest.Span) {
+	routes := uniqueServerRoutes(spans)
+	if len(routes) == 0 {
+		return
+	}
+	writef(w, "  routes\n")
+	for _, r := range routes {
+		writef(w, "    %s\n", r)
+	}
+}
+
+func writeWorktree(w io.Writer, ctx context.Context, dir string) {
+	sha, dirty, err := gitrev.State(ctx, dir)
+	if err != nil || sha == "" {
+		return
+	}
+	state := "clean"
+	if dirty {
+		state = "dirty"
+	}
+	writef(w, "worktree  sha=%s  %s\n", sha, state)
+	if !dirty {
+		writef(w, "\n")
+		return
+	}
+	paths, err := gitrev.ChangedPaths(ctx, dir)
+	if err != nil {
+		writef(w, "\n")
+		return
+	}
+	limit := len(paths)
+	if limit > 10 {
+		limit = 10
+	}
+	for i := 0; i < limit; i++ {
+		writef(w, "  %s\n", paths[i])
+	}
+	if len(paths) > limit {
+		writef(w, "  (%d more)\n", len(paths)-limit)
+	}
+	writef(w, "\n")
 }

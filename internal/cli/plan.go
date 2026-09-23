@@ -34,11 +34,11 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
-	raw, err := slurpDiff(stdin, path)
+	raw, src, err := resolveDiff(ctx, stdin, path, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
-	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, origin, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}
@@ -46,6 +46,7 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return err
 	}
+	writef(stdout, "origin   %s  diff=%s\n", origin, src)
 	writePlan(stdout, dag)
 	return nil
 }
@@ -111,11 +112,11 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	raw, err := slurpDiff(stdin, path)
+	raw, _, err := resolveDiff(ctx, stdin, path, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}

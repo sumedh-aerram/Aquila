@@ -26,16 +26,16 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 		return fmt.Errorf("cli: impact: %w", err)
 	}
 
-	raw, err := slurpDiff(stdin, path)
+	raw, src, err := resolveDiff(ctx, stdin, path, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: impact: %w", err)
 	}
 
-	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, origin, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}
-	writeImpact(stdout, rep)
+	writeImpact(stdout, origin, src, rep)
 	return nil
 }
 
@@ -52,13 +52,17 @@ func fetchImpact(ctx context.Context, api string, traces int, raw []byte) (impac
 	return rep, nil
 }
 
-func writeImpact(w io.Writer, rep impact.Report) {
-	writef(w, "impact  files=%d  direct=%d  likely=%d  runtime=%d  unobserved=%d\n",
-		len(rep.Files), len(rep.Direct), len(rep.Likely), len(rep.Runtime), len(rep.Unobserved))
+func writeImpact(w io.Writer, origin, src string, rep impact.Report) {
+	writef(w, "impact  origin=%s  diff=%s  files=%d  direct=%d  likely=%d  runtime=%d  unobserved=%d\n",
+		origin, src, len(rep.Files), len(rep.Direct), len(rep.Likely), len(rep.Runtime), len(rep.Unobserved))
 	writeSection(w, "direct", rep.Direct)
 	writeSection(w, "likely", rep.Likely)
 	writeSection(w, "runtime", rep.Runtime)
 	writeSection(w, "unobserved", rep.Unobserved)
+	if origin == originFiles {
+		writef(w, "note     typed callers need a Go module in -dir\n")
+		writef(w, "note     runtime joins only when spans set code.file.path\n")
+	}
 }
 
 func writeSection(w io.Writer, title string, fs []impact.Finding) {
@@ -69,10 +73,10 @@ func writeSection(w io.Writer, title string, fs []impact.Finding) {
 	}
 	for _, f := range fs {
 		switch {
-		case f.Path != "":
-			writef(w, "  %s  %s  %s\n", f.Path, f.Reason, f.Provenance)
 		case f.Service != "":
 			writef(w, "  %s  %s  %s  %s\n", f.Service, f.Name, f.Reason, f.Provenance)
+		case f.Path != "":
+			writef(w, "  %s  %s  %s\n", f.Path, f.Reason, f.Provenance)
 		default:
 			writef(w, "  %s  %s  %s  %s\n", f.Name, f.File, f.Reason, f.Provenance)
 		}

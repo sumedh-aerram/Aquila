@@ -35,6 +35,23 @@ func TestBindMapsExplicitPaymentAttrs(t *testing.T) {
 	}
 }
 
+func TestBindNilGraphUnmapsSpans(t *testing.T) {
+	t.Parallel()
+	snap := Bind(nil, []ingest.Span{
+		{TraceID: "aa", SpanID: "01", ServiceName: "reroute", Name: "GET /api/health"},
+		{TraceID: "bb", SpanID: "02", CodeFunction: "health_check", CodeFile: "backend/server.py"},
+	})
+	if snap.SpanCount != 2 || snap.Bound != 0 || snap.UnmappedCount != 2 {
+		t.Fatalf("%+v", snap)
+	}
+	if snap.Unmapped[0].Reason != ReasonMissingAttrs {
+		t.Fatalf("reason=%q", snap.Unmapped[0].Reason)
+	}
+	if snap.Unmapped[1].Reason != ReasonNoFile {
+		t.Fatalf("reason=%q", snap.Unmapped[1].Reason)
+	}
+}
+
 func TestBindDoesNotUseSpanName(t *testing.T) {
 	t.Parallel()
 	g := fixtureGraph(t)

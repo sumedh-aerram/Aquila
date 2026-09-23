@@ -37,11 +37,11 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
-	raw, err := slurpDiff(stdin, path)
+	raw, _, err := resolveDiff(ctx, stdin, path, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
-	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}

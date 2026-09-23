@@ -28,6 +28,16 @@ import (
 	"github.com/sumedhaerram/aquila/internal/source"
 )
 
+func shopSnapshotDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	mod := "module " + controlPlaneModule + "\n\ngo 1.25\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestRunStatusReady(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,9 +244,12 @@ func TestRunImpactPrintsDirectAndLikely(t *testing.T) {
 
 func TestRunImpactEmptyDiff(t *testing.T) {
 	t.Parallel()
-	err := RunImpact(t.Context(), []string{"-api", "http://127.0.0.1:8080"}, strings.NewReader(""), io.Discard)
+	err := RunImpact(t.Context(), []string{"-api", "http://127.0.0.1:8080", "-dir", t.TempDir()}, strings.NewReader(""), io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "no local changes") {
+		t.Fatalf("%v", err)
 	}
 }
 
@@ -554,7 +567,7 @@ func TestRunPlanRejectsEmptyImpact(t *testing.T) {
 
 func TestRunPlanEmptyDiff(t *testing.T) {
 	t.Parallel()
-	err := RunPlan(t.Context(), []string{"-api", "http://127.0.0.1:8080"}, strings.NewReader(""), io.Discard)
+	err := RunPlan(t.Context(), []string{"-api", "http://127.0.0.1:8080", "-dir", t.TempDir()}, strings.NewReader(""), io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -573,7 +586,7 @@ func TestRunExperimentMatchIsNotPass(t *testing.T) {
 	t.Cleanup(gw.Close)
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -609,7 +622,7 @@ func TestRunExperimentDetectsJSONDifference(t *testing.T) {
 	t.Cleanup(patch.Close)
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", base.URL, "-patch", patch.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-api", api.URL, "-base", base.URL, "-patch", patch.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +645,7 @@ func TestRunExperimentIncompleteWhenPatchDown(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	down.Close()
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-api", api.URL, "-base", base.URL, "-patch", down.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("down patch must be incomplete, err=%v", err)
@@ -696,7 +709,7 @@ func TestRunExperimentLocalEnvPrepared(t *testing.T) {
 	}
 	var out strings.Builder
 	err = RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-api", api.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -739,7 +752,7 @@ func TestRunExperimentLocalEnvTearsDownOnStartFailure(t *testing.T) {
 		return nil
 	}
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-api", api.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
 	if err == nil {
 		t.Fatal("expected start failure")
@@ -852,7 +865,7 @@ func TestRunExperimentRecordsRun(t *testing.T) {
 	t.Cleanup(gw.Close)
 	var out strings.Builder
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-dir", t.TempDir(),
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
 	}, strings.NewReader("diff --git a/x b/x\n"), &out)
 	if err != nil {
 		t.Fatal(err)
@@ -1097,11 +1110,14 @@ func experimentAPI(t *testing.T, rep impact.Report) (*httptest.Server, *runs.Mem
 func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/impact" {
+		switch {
+		case r.URL.Path == "/v1/spans":
+			writeTestJSON(w, map[string]any{"spans": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/impact":
+			writeTestJSON(w, rep)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		writeTestJSON(w, rep)
 	}))
 	t.Cleanup(srv.Close)
 	return srv

@@ -26,6 +26,7 @@ type Input struct {
 	Services []string
 	Hops     []string
 	Paths    []string
+	Routes   []string
 	Binds    []string
 	Impact   *impact.Report
 }
@@ -79,6 +80,11 @@ func facts(in Input) []string {
 	for _, p := range in.Paths {
 		if p != "" {
 			out = append(out, "path "+p)
+		}
+	}
+	for _, r := range in.Routes {
+		if r != "" {
+			out = append(out, r)
 		}
 	}
 	for _, b := range in.Binds {

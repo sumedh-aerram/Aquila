@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/graph"
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/investigate"
 	"github.com/sumedhaerram/aquila/internal/locate"
 )
@@ -40,7 +41,7 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	if err := c.getJSON(ctx, "/v1/graph"+query, &rt); err != nil {
 		return err
 	}
-	_, loc, origin, _, locErr := observeJoin(ctx, c, *api, *dir, n, query)
+	_, loc, origin, spans, _, locErr := observeJoin(ctx, c, *api, *dir, n, query)
 	if locErr != nil && !unavailable(locErr) {
 		return locErr
 	}
@@ -52,17 +53,27 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		Hops:     hopLines(rt),
 		Paths:    pathLines(rt),
 		Binds:    bindLines(loc),
+		Routes:   routeFacts(spans),
 	}
 	if *file != "" {
 		raw, err := slurpDiff(stdin, *file)
 		if err != nil {
 			return fmt.Errorf("cli: ask: %w", err)
 		}
-		rep, err := analyzeDiff(ctx, *api, *dir, n, raw)
+		rep, _, err := analyzeDiff(ctx, *api, *dir, n, raw)
 		if err != nil {
 			return err
 		}
 		in.Impact = &rep
+	} else if origin != originAPI {
+		raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", *dir)
+		if err == nil && len(raw) > 0 {
+			rep, _, err := analyzeDiff(ctx, *api, *dir, n, raw)
+			if err != nil {
+				return err
+			}
+			in.Impact = &rep
+		}
 	}
 
 	rep, err := investigate.Search(in)
@@ -115,6 +126,14 @@ func bindLines(loc locate.Snapshot) []string {
 	out := make([]string, 0, len(loc.Bindings))
 	for _, b := range loc.Bindings {
 		out = append(out, strings.TrimSpace(b.ServiceName+" "+b.SourceName+" "+b.File))
+	}
+	return out
+}
+
+func routeFacts(spans []ingest.Span) []string {
+	out := make([]string, 0, len(spans))
+	for _, r := range uniqueServerRoutes(spans) {
+		out = append(out, "route "+r)
 	}
 	return out
 }

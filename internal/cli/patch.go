@@ -31,7 +31,7 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	if err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}
-	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}

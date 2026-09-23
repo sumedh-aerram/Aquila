@@ -1,6 +1,7 @@
 package gitrev
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,53 +10,182 @@ import (
 	"strings"
 )
 
+const (
+	maxDiffBytes    = 1 << 20
+	maxUntracked    = 50
+	maxChangedPrint = 20
+)
+
+// ErrNotGit means path is not inside a git work tree.
+var ErrNotGit = fmt.Errorf("gitrev: not a git work tree")
+
 // State reports HEAD and whether path has uncommitted changes.
 // If path is not inside a git work tree, sha is empty and dirty is false.
 func State(ctx context.Context, path string) (sha string, dirty bool, err error) {
-	if err := ctx.Err(); err != nil {
+	root, rel, err := locate(ctx, path)
+	if err != nil {
+		if err == ErrNotGit {
+			return "", false, nil
+		}
 		return "", false, err
-	}
-	if strings.TrimSpace(path) == "" {
-		path = "."
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		return "", false, fmt.Errorf("gitrev: %w", err)
-	}
-	if !st.IsDir() {
-		return "", false, fmt.Errorf("gitrev: not a directory")
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", false, fmt.Errorf("gitrev: %w", err)
-	}
-	if resolved, resErr := filepath.EvalSymlinks(abs); resErr == nil {
-		abs = resolved
-	}
-	root := showToplevel(ctx, abs)
-	if root == "" {
-		return "", false, nil
-	}
-	if resolved, resErr := filepath.EvalSymlinks(root); resErr == nil {
-		root = resolved
 	}
 	shaOut, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD").Output()
 	if err != nil {
 		return "", false, nil
 	}
 	sha = strings.TrimSpace(string(shaOut))
-	rel := "."
-	if r, relErr := filepath.Rel(root, abs); relErr == nil && r != "" {
-		rel = filepath.ToSlash(r)
-	}
-	if rel != "." && (rel == ".." || strings.HasPrefix(rel, "../")) {
-		return sha, false, nil
-	}
 	stOut, err := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=all", "--", rel).Output()
 	if err != nil {
 		return sha, false, nil
 	}
 	return sha, strings.TrimSpace(string(stOut)) != "", nil
+}
+
+// ChangedPaths lists worktree paths that differ from HEAD, including untracked files.
+func ChangedPaths(ctx context.Context, path string) ([]string, error) {
+	root, rel, err := locate(ctx, path)
+	if err != nil {
+		if err == ErrNotGit {
+			return nil, nil
+		}
+		return nil, err
+	}
+	stOut, err := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=all", "--", rel).Output()
+	if err != nil {
+		return nil, fmt.Errorf("gitrev: status: %w", err)
+	}
+	return porcelainPaths(stOut), nil
+}
+
+// UnifiedDiff returns git diff HEAD for path, plus stub hunks for untracked files.
+// A missing git tree returns ErrNotGit. A clean tree returns a nil slice.
+func UnifiedDiff(ctx context.Context, path string) ([]byte, error) {
+	root, rel, err := locate(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	tracked, err := exec.CommandContext(ctx, "git", "-C", root, "diff", "HEAD", "--", rel).Output()
+	if err != nil {
+		return nil, fmt.Errorf("gitrev: diff: %w", err)
+	}
+	var buf bytes.Buffer
+	if len(bytes.TrimSpace(tracked)) > 0 {
+		buf.Write(tracked)
+		if tracked[len(tracked)-1] != '\n' {
+			buf.WriteByte('\n')
+		}
+	}
+	stOut, err := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=all", "--", rel).Output()
+	if err != nil {
+		return nil, fmt.Errorf("gitrev: status: %w", err)
+	}
+	nUntracked := 0
+	for _, p := range porcelainUntracked(stOut) {
+		if nUntracked >= maxUntracked {
+			break
+		}
+		nUntracked++
+		stub := stubNewFile(p)
+		if buf.Len()+len(stub) > maxDiffBytes {
+			return nil, fmt.Errorf("gitrev: diff exceeds %d bytes", maxDiffBytes)
+		}
+		buf.Write(stub)
+	}
+	if buf.Len() > maxDiffBytes {
+		return nil, fmt.Errorf("gitrev: diff exceeds %d bytes", maxDiffBytes)
+	}
+	if buf.Len() == 0 {
+		return nil, nil
+	}
+	return buf.Bytes(), nil
+}
+
+func locate(ctx context.Context, path string) (root, rel string, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		path = "."
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return "", "", fmt.Errorf("gitrev: %w", err)
+	}
+	if !st.IsDir() {
+		return "", "", fmt.Errorf("gitrev: not a directory")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", fmt.Errorf("gitrev: %w", err)
+	}
+	if resolved, resErr := filepath.EvalSymlinks(abs); resErr == nil {
+		abs = resolved
+	}
+	root = showToplevel(ctx, abs)
+	if root == "" {
+		return "", "", ErrNotGit
+	}
+	if resolved, resErr := filepath.EvalSymlinks(root); resErr == nil {
+		root = resolved
+	}
+	rel = "."
+	if r, relErr := filepath.Rel(root, abs); relErr == nil && r != "" {
+		rel = filepath.ToSlash(r)
+	}
+	if rel != "." && (rel == ".." || strings.HasPrefix(rel, "../")) {
+		return "", "", ErrNotGit
+	}
+	return root, rel, nil
+}
+
+func porcelainPaths(out []byte) []string {
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		p := porcelainPath(line)
+		if p == "" {
+			continue
+		}
+		paths = append(paths, p)
+		if len(paths) >= maxChangedPrint {
+			break
+		}
+	}
+	return paths
+}
+
+func porcelainUntracked(out []byte) []string {
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "?? ") {
+			continue
+		}
+		p := porcelainPath(line)
+		if p == "" {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+func porcelainPath(line string) string {
+	if len(line) < 4 {
+		return ""
+	}
+	rest := strings.TrimSpace(line[3:])
+	if i := strings.Index(rest, " -> "); i >= 0 {
+		rest = rest[i+4:]
+	}
+	rest = strings.Trim(rest, `"`)
+	if rest == "" || strings.Contains(rest, "..") {
+		return ""
+	}
+	return filepath.ToSlash(rest)
+}
+
+func stubNewFile(path string) []byte {
+	p := filepath.ToSlash(path)
+	return []byte("diff --git a/" + p + " b/" + p + "\nnew file mode 100644\n--- /dev/null\n+++ b/" + p + "\n@@ -0,0 +1 @@\n+\n")
 }
 
 func showToplevel(ctx context.Context, dir string) string {

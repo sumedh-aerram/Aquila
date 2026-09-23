@@ -1,6 +1,7 @@
 package gitrev
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +57,53 @@ func TestStateHEADAndDirty(t *testing.T) {
 	}
 	if !dirty {
 		t.Fatal("untracked file must be dirty")
+	}
+
+	raw, err := UnifiedDiff(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("wip.txt")) {
+		t.Fatalf("untracked missing from diff:\n%s", raw)
+	}
+	paths, err := ChangedPaths(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "wip.txt" {
+		t.Fatalf("paths=%v", paths)
+	}
+}
+
+func TestUnifiedDiffTrackedHunk(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "a.go")
+	runGit(t, dir, "-c", "user.email=aquila@test", "-c", "user.name=aquila", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "add")
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc F() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := UnifiedDiff(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("func F()")) {
+		t.Fatalf("%s", raw)
+	}
+}
+
+func TestUnifiedDiffNotGit(t *testing.T) {
+	t.Parallel()
+	_, err := UnifiedDiff(t.Context(), t.TempDir())
+	if err != ErrNotGit {
+		t.Fatalf("err=%v", err)
 	}
 }
 

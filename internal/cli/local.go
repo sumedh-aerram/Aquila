@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -14,13 +17,33 @@ import (
 	"github.com/sumedhaerram/aquila/internal/source"
 )
 
-const controlPlaneModule = "github.com/sumedhaerram/aquila"
+const (
+	controlPlaneModule = "github.com/sumedhaerram/aquila"
 
-func analyzeDiff(ctx context.Context, api, dir string, traces int, raw []byte) (impact.Report, error) {
-	if g := loadTargetSource(ctx, dir); g != nil {
-		return impactFromWindow(ctx, api, traces, g, raw)
+	originCwd   = "cwd"
+	originAPI   = "api"
+	originFiles = "files"
+	originNone  = "none"
+)
+
+func analyzeDiff(ctx context.Context, api, dir string, traces int, raw []byte) (impact.Report, string, error) {
+	parsed, err := diff.Parse(raw)
+	if err != nil {
+		return impact.Report{}, "", fmt.Errorf("cli: impact: %w", err)
 	}
-	return fetchImpact(ctx, api, traces, raw)
+	if g := loadTargetSource(ctx, dir); g != nil {
+		rep, err := impactFromWindow(ctx, api, traces, g, parsed)
+		return rep, originCwd, err
+	}
+	if controlPlaneDir(dir) {
+		rep, err := fetchImpact(ctx, api, traces, raw)
+		return rep, originAPI, err
+	}
+	spans, err := fetchSpans(ctx, api, traces)
+	if err != nil {
+		return impact.Report{}, originFiles, err
+	}
+	return impact.FromDiff(parsed, spans), originFiles, nil
 }
 
 func loadTargetSource(ctx context.Context, dir string) *source.Graph {
@@ -39,12 +62,56 @@ func loadTargetSource(ctx context.Context, dir string) *source.Graph {
 	return g
 }
 
-func impactFromWindow(ctx context.Context, api string, traces int, g *source.Graph, raw []byte) (impact.Report, error) {
+func controlPlaneDir(dir string) bool {
+	root := findGoMod(dir)
+	if root == "" {
+		return false
+	}
+	return readModulePath(root) == controlPlaneModule
+}
+
+func findGoMod(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		dir = "."
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(abs, "go.mod")); err == nil {
+			return abs
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return ""
+		}
+		abs = parent
+	}
+}
+
+func readModulePath(dir string) string {
+	f, err := os.Open(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+func impactFromWindow(ctx context.Context, api string, traces int, g *source.Graph, parsed diff.Diff) (impact.Report, error) {
 	spans, err := fetchSpans(ctx, api, traces)
 	if err != nil {
 		return impact.Report{}, err
 	}
-	return reportFromLocal(g, spans, raw)
+	return impact.Analyze(g, parsed, locate.Bind(g, spans), graph.Build(spans)), nil
 }
 
 func fetchSpans(ctx context.Context, api string, traces int) ([]ingest.Span, error) {
@@ -71,4 +138,37 @@ func reportFromLocal(g *source.Graph, spans []ingest.Span, raw []byte) (impact.R
 		return impact.Report{}, fmt.Errorf("cli: impact: %w", err)
 	}
 	return impact.Analyze(g, parsed, locate.Bind(g, spans), graph.Build(spans)), nil
+}
+
+func uniqueServerRoutes(spans []ingest.Span) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, s := range spans {
+		if strings.EqualFold(strings.TrimSpace(s.Kind), "internal") ||
+			strings.EqualFold(strings.TrimSpace(s.Kind), "client") ||
+			strings.EqualFold(strings.TrimSpace(s.Kind), "producer") ||
+			strings.EqualFold(strings.TrimSpace(s.Kind), "consumer") {
+			continue
+		}
+		method := strings.ToUpper(strings.TrimSpace(s.HTTPMethod))
+		route := strings.TrimSpace(s.HTTPRoute)
+		if method == "" || route == "" {
+			continue
+		}
+		svc := strings.TrimSpace(s.ServiceName)
+		key := svc + " " + method + " " + route
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		line := method + " " + route
+		if svc != "" {
+			line = svc + "  " + line
+		}
+		out = append(out, line)
+		if len(out) >= maxPrintBindings {
+			break
+		}
+	}
+	return out
 }
