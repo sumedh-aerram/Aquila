@@ -20,7 +20,7 @@ COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/co
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 
-.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval
+.PHONY: help build test shop-test lint fmt tidy migrate dev down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval
 
 help:
 	@printf '%s\n' \
@@ -36,6 +36,7 @@ help:
 		'  make dev       Start control plane + shop demo' \
 		'  make shop-smoke  Hit gateway health, user fetch, and checkout' \
 		'  make ingest-smoke  List spans Aquila stored after shop traffic' \
+		'  make ingest-eval   OTLP normalize and ingest API tests (privacy + pentest)' \
 		'  make graph-smoke  Derive services, edges, and paths from stored spans' \
 		'  make source-index  Parse examples/shop into out/source.json' \
 		'  make source-smoke  Print the loaded shop source graph' \
@@ -47,6 +48,7 @@ help:
 		'  make replay-eval   Replay, latency, and fault tests (no fake pass)' \
 		'  make plan-eval     Experiment plan, execute, and evidence-report tests (no fake pass)' \
 		'  make runs-eval     Persist experiment runs in the control plane (no fake pass)' \
+		'  make attach-eval   Cwd-native impact and span-derived GET replay (no fixture lock)' \
 		'  make down      Stop the local Compose stack' \
 		'  make logs      Tail Compose logs' \
 		'  make version   Print the build version string'
@@ -74,6 +76,10 @@ shop-smoke:
 
 ingest-smoke: shop-smoke
 	@curl -sf 'http://127.0.0.1:8080/v1/spans?limit=20'
+
+ingest-eval:
+	$(GO) test -race -count=1 ./internal/ingest ./internal/api -run 'TestNormalize|TestDecode|TestOTLP|TestSanitize|TestClip'
+	$(GO) -C examples/shop test -race -count=1 ./internal/httpx ./internal/telemetry
 
 graph-smoke: ingest-smoke
 	@curl -sf 'http://127.0.0.1:8080/v1/graph?traces=20'
@@ -125,6 +131,11 @@ runs-eval:
 	$(GO) test -race -count=1 ./internal/runs ./internal/gitrev ./internal/evidence
 	$(GO) test -race -count=1 ./internal/api -run 'TestCreateRun|TestGetRun'
 	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunExperimentRecords|TestRunRuns|TestRunHelp'
+
+attach-eval:
+	$(GO) test -race -count=1 ./internal/replay -run 'TestFromSpans|TestShopFixture'
+	$(GO) test -race -count=1 ./internal/api -run 'TestListSpans'
+	$(GO) test -race -count=1 ./internal/cli -run 'TestRunImpact|TestLoadTarget|TestReportFromLocal|TestRunReplay'
 
 fmt:
 	$(GO) fmt ./...

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/sumedhaerram/aquila/internal/config"
@@ -72,7 +74,7 @@ func TestOTLPTracesPersistsNormalizedSpan(t *testing.T) {
 	if len(out.Spans) != 1 {
 		t.Fatalf("spans=%d", len(out.Spans))
 	}
-	if out.Spans[0].ServiceName != "gateway" || out.Spans[0].HTTPRoute != "GET /users/{id}" {
+	if out.Spans[0].ServiceName != "gateway" || out.Spans[0].HTTPRoute != "/users/{id}" {
 		t.Fatalf("%+v", out.Spans[0])
 	}
 	if bytes.Contains(listRec.Body.Bytes(), []byte("secret")) {
@@ -134,8 +136,139 @@ func TestOTLPTracesRejectsOversizedBody(t *testing.T) {
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 	rec := httptest.NewRecorder()
 	srv.http.Handler.ServeHTTP(rec, httpReq)
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestOTLPTracesRejectsUnknownContentType(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: ingest.NewMemory()})
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte(`{}`)))
+	httpReq.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httpReq)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestOTLPTracesAcceptsGzipAndJSON(t *testing.T) {
+	t.Parallel()
+	store := ingest.NewMemory()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
+	raw := marshalMinimalOTLP(t)
+
+	var gz bytes.Buffer
+	w := gzip.NewWriter(&gz)
+	if _, err := w.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(gz.Bytes()))
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set("Content-Encoding", "GZIP")
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httpReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("gzip status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req := &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{
+					TraceId: bytes.Repeat([]byte{0x33}, 16),
+					SpanId:  bytes.Repeat([]byte{0x44}, 8),
+					Name:    "GET /healthz",
+				}},
+			}},
+		}},
+	}
+	js, err := protojson.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(js))
+	jsonReq.Header.Set("Content-Type", "application/json")
+	jsonRec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(jsonRec, jsonReq)
+	if jsonRec.Code != http.StatusOK {
+		t.Fatalf("json status=%d body=%s", jsonRec.Code, jsonRec.Body.String())
+	}
+	if ct := jsonRec.Header().Get("Content-Type"); !strings.Contains(ct, "json") {
+		t.Fatalf("content-type=%q", ct)
+	}
+}
+
+func TestOTLPTracesDoesNotPersistUserinfo(t *testing.T) {
+	t.Parallel()
+	store := ingest.NewMemory()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
+	req := &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{
+					TraceId: bytes.Repeat([]byte{0xab}, 16),
+					SpanId:  bytes.Repeat([]byte{0xcd}, 8),
+					Name:    "GET",
+					Attributes: []*commonpb.KeyValue{
+						{Key: "url.full", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "https://user:leak@host/v1/x?token=1"}}},
+					},
+				}},
+			}},
+		}},
+	}
+	raw, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(raw))
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httpReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	listRec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/v1/spans", nil))
+	if bytes.Contains(listRec.Body.Bytes(), []byte("leak")) || bytes.Contains(listRec.Body.Bytes(), []byte("token=")) {
+		t.Fatalf("secret leaked: %s", listRec.Body.String())
+	}
+}
+
+func TestOTLPTracesPartialSuccessOnInvalidIDs(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: ingest.NewMemory()})
+	req := &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{
+					{TraceId: []byte{1}, SpanId: bytes.Repeat([]byte{2}, 8), Name: "bad"},
+					{TraceId: bytes.Repeat([]byte{1}, 16), SpanId: bytes.Repeat([]byte{2}, 8), Name: "ok"},
+				},
+			}},
+		}},
+	}
+	raw, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader(raw))
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httpReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	var resp coltracepb.ExportTraceServiceResponse
+	if err := proto.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetPartialSuccess().GetRejectedSpans() != 1 {
+		t.Fatalf("%+v", resp.GetPartialSuccess())
 	}
 }
 
@@ -148,6 +281,50 @@ func TestListSpansClipsQueryParams(t *testing.T) {
 	srv.http.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListSpansTraceWindow(t *testing.T) {
+	t.Parallel()
+	store := ingest.NewMemory()
+	older := time.Unix(1, 0).UTC()
+	newer := time.Unix(2, 0).UTC()
+	if err := store.UpsertSpans(t.Context(), []ingest.Span{
+		{TraceID: "old", SpanID: "1", ServiceName: "a", HTTPMethod: "GET", HTTPRoute: "/old", StartTime: older},
+		{TraceID: "new", SpanID: "2", ServiceName: "b", HTTPMethod: "GET", HTTPRoute: "/new", StartTime: newer},
+		{TraceID: "new", SpanID: "3", ParentSpanID: "2", ServiceName: "c", HTTPMethod: "GET", HTTPRoute: "/child", StartTime: newer.Add(time.Millisecond)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/spans?traces=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Spans []ingest.Span `json:"spans"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Spans) != 2 {
+		t.Fatalf("spans=%d", len(out.Spans))
+	}
+	for _, s := range out.Spans {
+		if s.TraceID != "new" {
+			t.Fatalf("%+v", out.Spans)
+		}
+	}
+}
+
+func TestListSpansInvalidTraces(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: ingest.NewMemory()})
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/spans?traces=nope", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d", rec.Code)
 	}
 }
 

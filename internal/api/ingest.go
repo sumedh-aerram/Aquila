@@ -2,13 +2,17 @@ package api
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/sumedhaerram/aquila/internal/ingest"
@@ -32,28 +36,61 @@ func (s *Server) handleOTLPTraces(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := readOTLPBody(r)
 	if err != nil {
+		if isTooLarge(err) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "otlp payload too large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid otlp payload"})
 		return
 	}
 	req, err := ingest.DecodeOTLP(r.Header.Get("Content-Type"), body)
 	if err != nil {
-		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "invalid otlp payload"})
+		if errors.Is(err, ingest.ErrUnsupportedType) {
+			writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "invalid otlp payload"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid otlp payload"})
 		return
 	}
-	spans := ingest.Normalize(req)
-	if err := s.spans.UpsertSpans(r.Context(), spans); err != nil {
+	rep := ingest.NormalizeReport(req)
+	if err := s.spans.UpsertSpans(r.Context(), rep.Spans); err != nil {
 		s.log.Error("ingest spans", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ingest failed"})
 		return
 	}
-	resp, err := proto.Marshal(&coltracepb.ExportTraceServiceResponse{})
-	if err != nil {
+	out := &coltracepb.ExportTraceServiceResponse{}
+	if n := rep.Rejected(); n > 0 {
+		out.PartialSuccess = &coltracepb.ExportTracePartialSuccess{
+			RejectedSpans: int64(n),
+			ErrorMessage:  "invalid or truncated spans",
+		}
+	}
+	if err := writeOTLPResponse(w, r.Header.Get("Content-Type"), out); err != nil {
+		s.log.Error("encode otlp response", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ingest failed"})
-		return
+	}
+}
+
+func writeOTLPResponse(w http.ResponseWriter, contentType string, out *coltracepb.ExportTraceServiceResponse) error {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if ct == "application/json" {
+		raw, err := protojson.Marshal(out)
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return nil
+	}
+	raw, err := proto.Marshal(out)
+	if err != nil {
+		return err
 	}
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(resp)
+	_, _ = w.Write(raw)
+	return nil
 }
 
 func (s *Server) ingestAuthorized(r *http.Request) bool {
@@ -62,13 +99,15 @@ func (s *Server) ingestAuthorized(r *http.Request) bool {
 		return true
 	}
 	got := r.Header.Get(ingestTokenHeader)
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+	sumGot := sha256.Sum256([]byte(got))
+	sumWant := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(sumGot[:], sumWant[:]) == 1
 }
 
 func readOTLPBody(r *http.Request) ([]byte, error) {
 	limited := http.MaxBytesReader(nil, r.Body, otlpMaxBytes)
 	src := io.Reader(limited)
-	if r.Header.Get("Content-Encoding") == "gzip" {
+	if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
 		gr, err := gzip.NewReader(limited)
 		if err != nil {
 			return nil, err
@@ -81,14 +120,45 @@ func readOTLPBody(r *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	if len(body) > otlpMaxBytes {
-		return nil, io.ErrUnexpectedEOF
+		return nil, errOTLPTooLarge
 	}
 	return body, nil
+}
+
+var errOTLPTooLarge = errors.New("otlp payload too large")
+
+func isTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errOTLPTooLarge) {
+		return true
+	}
+	var maxBytes *http.MaxBytesError
+	return errors.As(err, &maxBytes)
 }
 
 func (s *Server) handleListSpans(w http.ResponseWriter, r *http.Request) {
 	if s.spans == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "ingest unavailable"})
+		return
+	}
+	if raw := r.URL.Query().Get("traces"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid traces"})
+			return
+		}
+		spans, err := s.spans.ListTraceWindow(r.Context(), n)
+		if err != nil {
+			s.log.Error("list trace window", "err", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list failed"})
+			return
+		}
+		if spans == nil {
+			spans = []ingest.Span{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"spans": spans})
 		return
 	}
 	q := ingest.ListQuery{

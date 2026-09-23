@@ -10,8 +10,9 @@ import (
 const (
 	maxSteps = 20
 
-	ProvenanceSpanRoute   = "span_route"
-	ProvenanceSpanAndBody = "span_route+fixture_body"
+	// ProvenanceSpanRoute marks a step taken from a stored server-span route.
+	ProvenanceSpanRoute = "span_route"
+	// ProvenanceShopFixture marks a step from the shop smoke fixture, not from traces.
 	ProvenanceShopFixture = "shop_fixture"
 )
 
@@ -40,8 +41,9 @@ func ShopFixture() Workload {
 
 var checkoutBody = []byte(`{"user_id":"user-1","items":[{"sku":"sku-widget","qty":1}]}`)
 
-// FromSpans builds gateway requests from allowlisted server routes. Client hops
-// and internal URLs are omitted. POST /checkout uses the shop fixture body.
+// FromSpans builds GET/HEAD/OPTIONS requests from server-span routes.
+// Client hops, mutating methods, and parameterized templates are omitted.
+// Bodies are never taken from spans.
 func FromSpans(spans []ingest.Span) Workload {
 	out := Workload{Steps: []Step{}}
 	if len(spans) == 0 {
@@ -49,11 +51,11 @@ func FromSpans(spans []ingest.Span) Workload {
 	}
 	seen := map[string]struct{}{}
 	for _, s := range spans {
-		if strings.EqualFold(s.Kind, "client") {
+		if skipKind(s.Kind) {
 			continue
 		}
 		method, path, ok := routeParts(s)
-		if !ok || !gatewayRoute(method, path) {
+		if !ok || !safeReplay(method, path) {
 			continue
 		}
 		key := method + " " + path
@@ -61,19 +63,44 @@ func FromSpans(spans []ingest.Span) Workload {
 			continue
 		}
 		seen[key] = struct{}{}
-		st := Step{Method: method, Path: path, Provenance: ProvenanceSpanRoute, Service: s.ServiceName}
-		if method == http.MethodPost && path == "/checkout" {
-			st.Body = append([]byte(nil), checkoutBody...)
-			st.Provenance = ProvenanceSpanAndBody
-		} else if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
-			continue
-		}
-		out.Steps = append(out.Steps, st)
+		out.Steps = append(out.Steps, Step{
+			Method:     method,
+			Path:       path,
+			Provenance: ProvenanceSpanRoute,
+			Service:    s.ServiceName,
+		})
 		if len(out.Steps) >= maxSteps {
 			break
 		}
 	}
 	return out
+}
+
+func skipKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "client", "producer", "consumer", "internal":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeReplay(method, path string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	default:
+		return false
+	}
+	if !strings.HasPrefix(path, "/") {
+		return false
+	}
+	if strings.Contains(path, "..") || strings.Contains(path, "\\") || strings.Contains(path, "@") {
+		return false
+	}
+	if strings.ContainsAny(path, "{}*") {
+		return false
+	}
+	return true
 }
 
 func routeParts(s ingest.Span) (method, path string, ok bool) {
@@ -97,26 +124,12 @@ func routeParts(s ingest.Span) (method, path string, ok bool) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	if strings.Contains(path, "..") || strings.Contains(path, "\\") || strings.Contains(path, "@") {
-		return "", "", false
-	}
 	return method, path, true
-}
-
-func gatewayRoute(method, path string) bool {
-	switch method {
-	case http.MethodGet:
-		return path == "/healthz" || strings.HasPrefix(path, "/users/") || path == "/checkout" || strings.HasPrefix(path, "/checkout/")
-	case http.MethodPost:
-		return path == "/checkout"
-	default:
-		return false
-	}
 }
 
 func isHTTPMethod(s string) bool {
 	switch s {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead, http.MethodOptions:
 		return true
 	default:
 		return false

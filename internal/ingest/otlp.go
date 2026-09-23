@@ -1,8 +1,9 @@
 package ingest
 
 import (
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,31 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
+
+const (
+	otelTraceIDLen = 16
+	otelSpanIDLen  = 8
+)
+
+// ErrUnsupportedType is returned when the OTLP Content-Type is not protobuf or JSON.
+var ErrUnsupportedType = errors.New("unsupported content type")
+
+// Report is the result of normalizing one OTLP export. Rejected is seen minus kept.
+type Report struct {
+	Spans     []Span
+	Seen      int
+	Dropped   int
+	Truncated bool
+}
+
+// Rejected is the number of spans not stored from this export.
+func (r Report) Rejected() int {
+	n := r.Seen - len(r.Spans)
+	if n < 0 {
+		return 0
+	}
+	return n
+}
 
 // DecodeOTLP unmarshals an OTLP ExportTraceServiceRequest from protobuf or JSON.
 func DecodeOTLP(contentType string, body []byte) (*coltracepb.ExportTraceServiceRequest, error) {
@@ -34,32 +60,47 @@ func DecodeOTLP(contentType string, body []byte) (*coltracepb.ExportTraceService
 			return nil, fmt.Errorf("decode otlp protobuf: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("unsupported content type %q", contentType)
+		return nil, fmt.Errorf("%w %q", ErrUnsupportedType, contentType)
 	}
 	return req, nil
 }
 
 // Normalize extracts allowlisted span metadata. Request bodies are never copied.
 func Normalize(req *coltracepb.ExportTraceServiceRequest) []Span {
+	return NormalizeReport(req).Spans
+}
+
+// NormalizeReport extracts allowlisted metadata and counts dropped or truncated spans.
+func NormalizeReport(req *coltracepb.ExportTraceServiceRequest) Report {
+	return normalizeBatch(req, maxSpansBatch)
+}
+
+func normalizeBatch(req *coltracepb.ExportTraceServiceRequest, limit int) Report {
+	out := Report{Spans: []Span{}}
 	if req == nil {
-		return []Span{}
+		return out
 	}
-	out := make([]Span, 0, 16)
+	if limit <= 0 {
+		limit = maxSpansBatch
+	}
 	for _, rs := range req.GetResourceSpans() {
-		service := clip(attrString(rs.GetResource().GetAttributes(), "service.name"), maxString)
+		service := sanitizeText(attrString(rs.GetResource().GetAttributes(), "service.name"), maxString)
 		if service == "" {
 			service = "unknown"
 		}
 		for _, ss := range rs.GetScopeSpans() {
 			for _, sp := range ss.GetSpans() {
+				out.Seen++
 				span, ok := normalizeSpan(service, sp)
 				if !ok {
+					out.Dropped++
 					continue
 				}
-				out = append(out, span)
-				if len(out) >= maxSpansBatch {
-					return out
+				if len(out.Spans) >= limit {
+					out.Truncated = true
+					continue
 				}
+				out.Spans = append(out.Spans, span)
 			}
 		}
 	}
@@ -67,53 +108,67 @@ func Normalize(req *coltracepb.ExportTraceServiceRequest) []Span {
 }
 
 func normalizeSpan(service string, sp *tracepb.Span) (Span, bool) {
-	traceID := hex.EncodeToString(sp.GetTraceId())
-	spanID := hex.EncodeToString(sp.GetSpanId())
-	if traceID == "" || spanID == "" || isZeroHex(sp.GetTraceId()) || isZeroHex(sp.GetSpanId()) {
+	if !validID(sp.GetTraceId(), otelTraceIDLen) || !validID(sp.GetSpanId(), otelSpanIDLen) {
+		return Span{}, false
+	}
+	startNS := sp.GetStartTimeUnixNano()
+	endNS := sp.GetEndTimeUnixNano()
+	if startNS > uint64(math.MaxInt64) || endNS > uint64(math.MaxInt64) {
 		return Span{}, false
 	}
 	attrs := sp.GetAttributes()
-	start := time.Unix(0, int64(sp.GetStartTimeUnixNano())).UTC()
-	end := time.Unix(0, int64(sp.GetEndTimeUnixNano())).UTC()
+	start := time.Unix(0, int64(startNS)).UTC()
+	end := time.Unix(0, int64(endNS)).UTC()
 	var dur int64
 	if !end.Before(start) {
 		dur = end.Sub(start).Nanoseconds()
 	}
 	parent := ""
-	if !isZeroHex(sp.GetParentSpanId()) {
-		parent = hex.EncodeToString(sp.GetParentSpanId())
+	if pid := sp.GetParentSpanId(); validID(pid, otelSpanIDLen) {
+		parent = hexID(pid)
 	}
-	route := stripQuery(httpRoute(attrs))
+	route := sanitizeRoute(httpRoute(attrs))
+	method := canonicalMethod(attrString(attrs, "http.request.method", "http.method"))
+	method, route = splitMethodRoute(method, route)
 	return Span{
-		TraceID:      clip(traceID, 32),
-		SpanID:       clip(spanID, 16),
-		ParentSpanID: clip(parent, 16),
+		TraceID:      hexID(sp.GetTraceId()),
+		SpanID:       hexID(sp.GetSpanId()),
+		ParentSpanID: parent,
 		ServiceName:  service,
-		Name:         clip(stripQuery(sp.GetName()), maxString),
+		Name:         sanitizeName(sp.GetName()),
 		Kind:         spanKind(sp.GetKind()),
 		StatusCode:   statusCode(sp.GetStatus()),
-		HTTPMethod:   clip(attrString(attrs, "http.request.method", "http.method"), 16),
-		HTTPRoute:    clip(route, maxString),
-		HTTPStatus:   attrInt(attrs, "http.response.status_code", "http.status_code"),
-		CodeFunction: clip(attrString(attrs, "code.function.name", "code.function"), maxString),
-		CodeFile:     clip(attrString(attrs, "code.file.path", "code.filepath"), maxString),
+		HTTPMethod:   method,
+		HTTPRoute:    route,
+		HTTPStatus:   canonicalStatus(attrInt(attrs, "http.response.status_code", "http.status_code")),
+		CodeFunction: sanitizeText(attrString(attrs, "code.function.name", "code.function"), maxString),
+		CodeFile:     sanitizeFile(attrString(attrs, "code.file.path", "code.filepath")),
 		StartTime:    start,
 		DurationNS:   dur,
 	}, true
 }
 
-func httpRoute(attrs []*commonpb.KeyValue) string {
-	if v := attrString(attrs, "http.route"); v != "" {
-		return v
+func splitMethodRoute(method, route string) (string, string) {
+	method = canonicalMethod(method)
+	route = strings.TrimSpace(route)
+	if m, rest, ok := strings.Cut(route, " "); ok {
+		if cm := canonicalMethod(m); cm != "" {
+			if method == "" {
+				method = cm
+			}
+			route = strings.TrimSpace(rest)
+		}
 	}
-	return attrString(attrs, "url.path", "http.target")
+	return method, route
 }
 
-func stripQuery(s string) string {
-	if i := strings.IndexByte(s, '?'); i >= 0 {
-		return s[:i]
+func httpRoute(attrs []*commonpb.KeyValue) string {
+	for _, key := range []string{"http.route", "url.path", "http.target", "url.full", "http.url"} {
+		if v := attrString(attrs, key); v != "" {
+			return v
+		}
 	}
-	return s
+	return ""
 }
 
 func spanKind(k tracepb.Span_SpanKind) string {
@@ -170,6 +225,9 @@ func attrInt(attrs []*commonpb.KeyValue, keys ...string) int {
 				return 0
 			}
 			if n := v.GetIntValue(); n != 0 {
+				if n < math.MinInt || n > math.MaxInt {
+					return 0
+				}
 				return int(n)
 			}
 			if s := strings.TrimSpace(v.GetStringValue()); s != "" {
@@ -200,6 +258,23 @@ func anyString(v *commonpb.AnyValue) string {
 	default:
 		return ""
 	}
+}
+
+func validID(b []byte, n int) bool {
+	if len(b) != n || isZeroHex(b) {
+		return false
+	}
+	return true
+}
+
+func hexID(b []byte) string {
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, len(b)*2)
+	for i, c := range b {
+		out[i*2] = hexdigits[c>>4]
+		out[i*2+1] = hexdigits[c&0x0f]
+	}
+	return string(out)
 }
 
 func isZeroHex(b []byte) bool {

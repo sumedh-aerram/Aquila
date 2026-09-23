@@ -48,13 +48,6 @@ type Store interface {
 	ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, error)
 }
 
-func clip(s string, n int) string {
-	if n <= 0 || len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
-
 func normalizeLimit(n int) int {
 	if n <= 0 {
 		return defaultList

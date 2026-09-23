@@ -17,6 +17,7 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	file := fs.String("f", "", "diff file (default stdin)")
+	dir := fs.String("dir", ".", "module under change (default cwd)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: impact: %w", err)
 	}
@@ -30,7 +31,7 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 		return fmt.Errorf("cli: impact: %w", err)
 	}
 
-	rep, err := fetchImpact(ctx, *api, *traces, raw)
+	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}

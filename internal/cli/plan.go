@@ -24,6 +24,7 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	file := fs.String("f", "", "diff file (default stdin)")
+	dir := fs.String("dir", ".", "module under change (default cwd)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
@@ -35,7 +36,7 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
-	rep, err := fetchImpact(ctx, *api, *traces, raw)
+	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}
@@ -87,10 +88,9 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	base := fs.String("base", "", "baseline gateway URL")
 	patch := fs.String("patch", "", "patch gateway URL")
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
-	limit := fs.Int("limit", 200, "span list limit when not using -fixture")
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
 	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
-	dir := fs.String("dir", ".", "git directory for baseline SHA (the repo under change)")
+	dir := fs.String("dir", ".", "module under change (default cwd)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
@@ -105,7 +105,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	rep, err := fetchImpact(ctx, *api, *traces, raw)
+	rep, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
 	if err != nil {
 		return err
 	}
@@ -121,13 +121,13 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if *fixture {
 		w = replay.ShopFixture()
 	} else {
-		w, err = loadWorkload(ctx, *api, *limit)
+		w, err = loadWorkload(ctx, *api, *traces)
 		if err != nil {
 			return err
 		}
 	}
 	if len(w.Steps) == 0 {
-		return fmt.Errorf("cli: experiment: empty workload (no gateway routes in spans; try -fixture)")
+		return fmt.Errorf("cli: experiment: empty workload (no replayable GET routes in server spans)")
 	}
 
 	ev, err := plan.Execute(ctx, dag, *base, *patch, w)

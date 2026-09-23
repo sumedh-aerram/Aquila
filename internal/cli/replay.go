@@ -20,7 +20,7 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 	base := fs.String("base", "", "baseline gateway URL")
 	patch := fs.String("patch", "", "patch gateway URL")
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
-	limit := fs.Int("limit", 200, "span list limit when not using -fixture")
+	traces := fs.Int("traces", defaultTraces, "trace window for span-derived routes (max 200)")
 	n := fs.Int("n", 1, "replay repeats for latency samples (p95 withheld below 20)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: replay: %w", err)
@@ -37,13 +37,13 @@ func RunReplay(ctx context.Context, args []string, stdout io.Writer) error {
 		w = replay.ShopFixture()
 	} else {
 		var err error
-		w, err = loadWorkload(ctx, *api, *limit)
+		w, err = loadWorkload(ctx, *api, *traces)
 		if err != nil {
 			return err
 		}
 	}
 	if len(w.Steps) == 0 {
-		return fmt.Errorf("cli: replay: empty workload (no gateway routes in spans; try -fixture)")
+		return fmt.Errorf("cli: replay: empty workload (no replayable GET routes in server spans)")
 	}
 
 	baseRuns, err := replay.Repeat(ctx, *base, w, *n)
@@ -128,17 +128,7 @@ func joinNotes(notes []string) string {
 	return strings.Join(notes, ",")
 }
 
-func clipList(n int) int {
-	if n <= 0 {
-		return 50
-	}
-	if n > 200 {
-		return 200
-	}
-	return n
-}
-
-func loadWorkload(ctx context.Context, api string, limit int) (replay.Workload, error) {
+func loadWorkload(ctx context.Context, api string, traces int) (replay.Workload, error) {
 	c, err := newClient(api)
 	if err != nil {
 		return replay.Workload{}, err
@@ -146,7 +136,8 @@ func loadWorkload(ctx context.Context, api string, limit int) (replay.Workload, 
 	var payload struct {
 		Spans []ingest.Span `json:"spans"`
 	}
-	if err := c.getJSON(ctx, "/v1/spans?limit="+strconv.Itoa(clipList(limit)), &payload); err != nil {
+	path := "/v1/spans?traces=" + strconv.Itoa(clipTraces(traces))
+	if err := c.getJSON(ctx, path, &payload); err != nil {
 		return replay.Workload{}, err
 	}
 	return replay.FromSpans(payload.Spans), nil

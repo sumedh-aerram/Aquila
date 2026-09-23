@@ -89,11 +89,11 @@ Commands:
 
 Flags:
   -api string     control-plane URL (default http://127.0.0.1:8080, or AQUILA_API_URL)
-  -traces int     observe/impact/plan/experiment trace window (default 20, max 200)
+  -traces int     observe/impact/plan/experiment/replay trace window (default 20, max 200)
   -f path         impact/env/plan/experiment: diff file (default stdin); runs: import evidence JSON
   -shop path      env: shop module (default examples/shop)
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
-  -dir path       experiment: git dir for baseline SHA (default .)
+  -dir path       impact/plan/experiment: module (and git tree) under change (default .)
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
@@ -103,17 +103,20 @@ Flags:
   -delay dur      fault: injected delay before proxy or status
   -status int     fault: if set, return this status and do not proxy
 
-impact reads git diff on stdin. It does not apply the patch. env copies the shop
-and applies the diff only to patch. replay hits -base and -patch; match is not
-a pass. p95 is withheld unless n>=20. No regression threshold. fault listens on
-loopback only; an injected 502 is a probe, not a pass. plan names env, behavior,
-latency, and (when runtime paths exist) an operator fault. experiment executes
-behavior and latency only; skipped operator steps are not a pass. experiment
--out writes evidence JSON (never validated). experiment also POSTs that
-artifact to /v1/runs when the API is up; a missing store is unrecorded, not
-a pass. report renders a file as Markdown without hitting gateways. runs lists
-stored evidence, shows one id, or imports -f. -dir is the repo under change
-(use it from another checkout). There is no ask command.
+impact reads git diff on stdin. It does not apply the patch. Standing in this
+repo falls back to POST /v1/impact so a shop snapshot still maps shop diffs;
+other modules are loaded from -dir. env copies the shop and applies the diff
+only to patch. replay hits -base and -patch using GET/HEAD/OPTIONS from server
+spans (no bodies); -fixture is shop smoke including POST /checkout. match is
+not a pass. p95 is withheld unless n>=20. No regression threshold. fault
+listens on loopback only; an injected 502 is a probe, not a pass. plan names
+env, behavior, latency, and (when runtime paths exist) an operator fault.
+experiment executes behavior and latency only; skipped operator steps are not
+a pass. experiment -out writes evidence JSON (never validated). experiment
+also POSTs that artifact to /v1/runs when the API is up; a missing store is
+unrecorded, not a pass. report renders a file as Markdown without hitting
+gateways. runs lists stored evidence, shows one id, or imports -f. There is
+no ask command.
 `
 }
 
