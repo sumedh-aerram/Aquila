@@ -1,25 +1,29 @@
 # Aquila
 
-**Control plane for changing distributed backends safely.**
+See what a backend change actually hits — in the code and in production traces — before you call it safe.
 
 [![CI](https://github.com/sumedh-aerram/Aquila/actions/workflows/ci.yml/badge.svg)](https://github.com/sumedh-aerram/Aquila/actions/workflows/ci.yml)
 
-A payment hunk is not “the payment service.” Aquila joins **git** (what the code is) to **OpenTelemetry** (how it ran), names the blast radius, and only then hits the **same routes** on baseline and patch.
+You edit a function. Aquila reads the **diff**, the **Go types**, and recent **OpenTelemetry traces**, and prints a blast radius. Then it can hit the **same routes** on a copy of the app from before and after the change.
 
-Match is not a pass. A skipped experiment is not evidence. There is no LLM in this loop.
+It will not guess a hop it did not observe. It will not treat a skipped experiment as evidence. There is no LLM in this loop.
 
-![Live `aquila impact` on a payment-handler diff: 1 direct, 1 likely, 3 runtime, 1 unobserved](assets/impact.svg)
+## One function, four facts
 
-| Bucket | Meaning | Provenance |
+This is a real payment-handler change in the demo shop. Aquila does not say “the payment service.” It says exactly this:
+
+![You edited chargeProcessor. Types show authorize calls it. Traces show gateway to checkout to payment to processor. chargeProcessor has no matching span, so it stays unlabeled.](assets/impact.svg)
+
+| In the picture | In the CLI | Meaning |
 | --- | --- | --- |
-| **direct** | hunk overlaps this function | `changed_lines` |
-| **likely** | typed callers, not callees | `caller` / `types` |
-| **runtime** | hops that actually ran | `observed_parent` / `code_attrs` |
-| **unobserved** | changed code, no locate hit | left empty — not guessed |
+| From the diff | `direct` | The hunk landed in this function |
+| From the types | `likely` | Something in source calls that function |
+| From traces | `runtime` | A request path that actually ran |
+| Not guessed / left blank | `unobserved` | Changed code with no matching span — on purpose |
 
-## Quick start
+## Run it
 
-Needs Go 1.25+, Docker, and Compose. Ports bind to loopback. First `make dev` builds images.
+Needs Go 1.25+, Docker, and Compose. First `make dev` builds images. Ports stay on loopback.
 
 ```bash
 git clone https://github.com/sumedh-aerram/Aquila.git
@@ -29,57 +33,47 @@ make dev && make cli && make shop-smoke
 ./bin/aquila impact -f internal/pair/testdata/d1.diff -traces 20 -service gateway
 ```
 
-That is the picture above: `chargeProcessor` from the diff, `authorize` as its typed caller, checkout → payment → processor from traces. `chargeProcessor` itself stays **unobserved** until a span binds it.
-
-> [!NOTE]
-> If `observe` lists more than one `service.name`, keep `-service gateway` so the shop window is not mixed with other attaches.
+You should see `chargeProcessor`, `authorize`, and the checkout → payment → processor path. `chargeProcessor` itself stays `unobserved` until a span binds it.
 
 ```bash
 ./bin/aquila observe -traces 20 -service gateway
-./bin/aquila ask checkout
 ```
 
-![Observed shop hops after shop-smoke (gateway → checkout → payment → processor)](assets/hops.svg)
+![How a checkout request moved: gateway to checkout to payment to processor (green), plus users, inventory, and notification](assets/hops.svg)
 
-Leave the stack up. `make cli` rebuilds the binary in seconds. `make up` restarts Compose without rebuilding images. `make down` when you are done.
+> [!NOTE]
+> If `observe` lists more than one `service.name`, keep `-service gateway`. That keeps the demo on the shop instead of mixing in other apps.
 
-## Loop
+`make cli` rebuilds the binary. `make up` restarts Compose without rebuilding images. `make down` when you are done.
+
+## The rest of the loop
 
 ```mermaid
 flowchart LR
-  git[Git] --> impact[impact]
-  otel[OTLP] --> observe[observe]
+  diff[git diff] --> impact[impact]
+  traces[OTLP traces] --> observe[observe]
   observe --> impact
   impact --> patch[patch]
-  patch --> exp[experiment]
+  patch --> exp[replay on baseline and patch]
   exp --> evidence[evidence]
 ```
 
-| Step | Command | You get |
-| --- | --- | --- |
-| Observe | `aquila observe` | Hops vs binds, labeled |
-| Ask | `aquila ask checkout` | Those facts, or nothing |
-| Impact | `aquila impact` | Blast radius of `git diff HEAD` (or `-f` / stdin) |
-| Patch | `aquila patch` | First matching shop rewrite (D1–D6). Not a pass |
-| Experiment | `aquila experiment` | Same workload on baseline and patch → match / differ / incomplete |
-| Report | `aquila report` | Markdown from saved evidence JSON |
+| You want | Run |
+| --- | --- |
+| Facts for a question | `./bin/aquila ask checkout` |
+| A shop rewrite for this diff | `./bin/aquila patch -f internal/pair/testdata/d1.diff` |
+| Same workload on before and after | `git diff \| ./bin/aquila experiment -fixture -n 1 -out out/evidence.json` |
+| Readable evidence | `./bin/aquila report out/evidence.json` |
 
-`aquila run` is ask → plan → candidate → experiment in one shot. `-plan-only` stops before gateways.
+`aquila run` is ask → plan → candidate → experiment in one shot.
 
-```bash
-git diff -- examples/shop/internal/payment/handler.go | ./bin/aquila impact -traces 20 -service gateway
-./bin/aquila patch -f internal/pair/testdata/d1.diff
-git diff | ./bin/aquila experiment -fixture -n 1 -out out/evidence.json
-./bin/aquila report out/evidence.json
-```
-
-`-n 1` / `-smoke` cannot earn `validated=true`. That bit is earned only when required steps succeed on a **clean recorded SHA** with latency n≥20.
+`-n 1` cannot mark the change `validated`. That only happens when the required steps succeed on a **clean recorded SHA** with enough latency samples (n≥20). Match still means “the two sides looked the same,” not “ship it.”
 
 ## Demo shop
 
-`examples/shop/` is seven instrumented services with documented defects ([DEFECTS.md](examples/shop/DEFECTS.md)). Demo target, not a second product. The hop diagram above is what `shop-smoke` actually ran.
+`examples/shop/` is seven small services with documented defects ([DEFECTS.md](examples/shop/DEFECTS.md)). It exists so the commands above have something real to look at.
 
-| ID | Symptom |
+| | What is wrong |
 | --- | --- |
 | D1 | New HTTP client on every authorize |
 | D2 | N+1 address queries |
@@ -88,20 +82,20 @@ git diff | ./bin/aquila experiment -fixture -n 1 -out out/evidence.json
 | D5 | Synchronous notify on the checkout path |
 | D6 | Process-wide Redis lock |
 
-Gateway: [http://127.0.0.1:18080](http://127.0.0.1:18080) — internals stay on the Compose network.
+Shop gateway: [http://127.0.0.1:18080](http://127.0.0.1:18080)
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `status` / `version` | Health, ready, build |
-| `observe` / `ask` | Runtime hops, source, span-to-source binds |
+| `status` / `version` | Is the control plane up |
+| `observe` / `ask` | What ran, and facts for a question |
 | `impact` | Blast radius of local git changes |
 | `patch` | Shop rewrite candidate (`-apply` writes the tree) |
-| `plan` / `experiment` / `run` | DAG; execute; ask+plan+patch+experiment |
-| `env` / `replay` / `fault` | Isolated pair; same workload on two gateways; loopback 502/delay |
-| `report` / `runs` | Evidence file → markdown; list/show stored runs |
-| `job` / `jobs` / `worker` | Durable DAG, cancel, lease/commit over gRPC |
+| `plan` / `experiment` / `run` | Plan, execute, or do the local loop |
+| `env` / `replay` / `fault` | Isolated pair, same workload on two gateways, loopback 502 |
+| `report` / `runs` | Evidence file → markdown; stored runs |
+| `job` / `jobs` / `worker` | Durable DAG over gRPC |
 
 ```bash
 make build && make test && make lint
@@ -116,7 +110,7 @@ make build && make test && make lint
 | OTLP | `:4317` gRPC, `:4318` HTTP |
 
 <details>
-<summary>Your own checkout</summary>
+<summary>Point it at your own checkout</summary>
 
 After `make dev` from this repository:
 
@@ -130,32 +124,18 @@ aquila impact -service ledger
 aquila experiment -service ledger -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out /tmp/evidence.json
 ```
 
-Typed callers need a Go module in `-dir`. Python (and friends) still show hops from OTLP; locate and likely callers stay unmapped until spans set `code.function.name` + `code.file.path`. Do not bind the app under test to `:8080` (Aquila).
+Typed callers need a Go module in `-dir`. Other languages still show hops from OTLP; function mapping stays empty until spans set `code.function.name` and `code.file.path`. Do not bind the app under test to `:8080` (Aquila).
 
-Omitting `-base` / `-patch` starts shop Compose **only** when `-dir` is `examples/shop` or this repo. A foreign checkout must pass two gateway URLs. `-fixture` is shop checkout smoke and is rejected off the shop. POST needs a `-workload` you wrote.
+Omitting `-base` / `-patch` starts the shop Compose **only** when `-dir` is `examples/shop` or this repo. A foreign checkout must pass two gateway URLs. `-fixture` is shop checkout smoke and is rejected off the shop. POST needs a `-workload` you wrote.
 
 </details>
 
 <details>
 <summary>How it is put together</summary>
 
-```mermaid
-flowchart TB
-  git[git] --> src[source graph]
-  otlp[OTLP] --> spans[span store]
-  src --> join[runtime graph]
-  spans --> join
-  join --> impact[impact]
-  impact --> jobs[job queue]
-  jobs --> w1[worker]
-  jobs --> w2[worker]
-  w1 --> ev[evidence]
-  w2 --> ev
-```
-
 Git is source truth. OpenTelemetry is runtime truth. PostgreSQL is Aquila’s coordination state. An LLM may propose; it never authors system state.
 
-Workers lease READY tasks over loopback gRPC, heartbeat a 15s lease, and cannot commit a stale attempt. `validated` is earned after required executable steps succeed with overall match on a clean recorded revision.
+Workers lease READY tasks over loopback gRPC, heartbeat a 15s lease, and cannot commit a stale attempt.
 
 When `AQUILA_API_TOKEN` is set, the CLI sends `Authorization: Bearer`. Local Compose leaves it empty. GCP module: [`deploy/terraform/`](deploy/terraform/README.md) (not applied from this repo). Ingest privacy and sandbox bounds: [docs/SECURITY.md](docs/SECURITY.md).
 

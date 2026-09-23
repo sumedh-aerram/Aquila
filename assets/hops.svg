@@ -1,57 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" role="img" aria-labelledby="title desc">
-  <title id="title">Observed shop hops after shop-smoke</title>
-  <desc id="desc">gateway to checkout n=10, gateway to users n=9, checkout to inventory n=4, checkout to payment n=2, payment to processor n=2, checkout to notification n=2, checkout to users n=2.</desc>
-  <rect width="880" height="360" fill="none"/>
-  <rect x="16" y="16" width="848" height="328" rx="14" fill="#0d1117" stroke="#30363d"/>
-  <text x="40" y="48" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="600">What ran</text>
-  <text x="840" y="48" text-anchor="end" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="12">observed_parent | traces=20</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 380" role="img" aria-labelledby="title desc">
+  <title id="title">How a checkout request moved through the demo shop</title>
+  <desc id="desc">Bold path is gateway to checkout to payment to processor. Also called: users, inventory, notification.</desc>
+  <rect x="16" y="16" width="848" height="348" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="40" y="50" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">How a checkout request moved</text>
+  <text x="40" y="72" fill="#656d76" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">Green is the path tied to the payment change. Blue is other hops from the same traffic.</text>
 
-  <rect x="248" y="68" width="128" height="40" rx="8" fill="#161b22" stroke="#388bfd"/>
-  <text x="312" y="93" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">users</text>
+  <rect x="248" y="92" width="128" height="40" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+  <text x="312" y="117" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">users</text>
 
-  <rect x="40" y="168" width="128" height="40" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="104" y="193" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">gateway</text>
+  <rect x="40" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="104" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">gateway</text>
 
-  <rect x="248" y="168" width="128" height="40" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="312" y="193" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">checkout</text>
+  <rect x="248" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="312" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">checkout</text>
 
-  <rect x="456" y="168" width="128" height="40" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="520" y="193" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">payment</text>
+  <rect x="456" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="520" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">payment</text>
 
-  <rect x="664" y="168" width="128" height="40" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="728" y="193" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">processor</text>
+  <rect x="664" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="728" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">processor</text>
 
-  <rect x="200" y="276" width="128" height="40" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="264" y="301" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">inventory</text>
+  <rect x="200" y="296" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="264" y="321" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">inventory</text>
 
-  <rect x="376" y="276" width="140" height="40" rx="8" fill="#161b22" stroke="#3fb950"/>
-  <text x="446" y="301" text-anchor="middle" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">notification</text>
+  <rect x="376" y="296" width="140" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="446" y="321" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">notification</text>
 
-  <line x1="168" y1="188" x2="240" y2="188" stroke="#3fb950" stroke-width="2"/>
-  <polygon points="248,188 238,183 238,193" fill="#3fb950"/>
-  <text x="208" y="180" text-anchor="middle" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=10</text>
+  <line x1="168" y1="208" x2="240" y2="208" stroke="#1a7f37" stroke-width="2.5"/>
+  <polygon points="248,208 238,203 238,213" fill="#1a7f37"/>
 
-  <line x1="376" y1="188" x2="448" y2="188" stroke="#3fb950" stroke-width="2"/>
-  <polygon points="456,188 446,183 446,193" fill="#3fb950"/>
-  <text x="416" y="180" text-anchor="middle" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=2</text>
+  <line x1="376" y1="208" x2="448" y2="208" stroke="#1a7f37" stroke-width="2.5"/>
+  <polygon points="456,208 446,203 446,213" fill="#1a7f37"/>
 
-  <line x1="584" y1="188" x2="656" y2="188" stroke="#3fb950" stroke-width="2"/>
-  <polygon points="664,188 654,183 654,193" fill="#3fb950"/>
-  <text x="624" y="180" text-anchor="middle" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=2</text>
+  <line x1="584" y1="208" x2="656" y2="208" stroke="#1a7f37" stroke-width="2.5"/>
+  <polygon points="664,208 654,203 654,213" fill="#1a7f37"/>
 
-  <path d="M104,168 C104,120 170,88 248,88" fill="none" stroke="#388bfd" stroke-width="1.75"/>
-  <polygon points="248,88 239,84 239,94" fill="#388bfd"/>
-  <text x="142" y="114" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=9</text>
+  <path d="M104,188 C104,140 170,112 248,112" fill="none" stroke="#0969da" stroke-width="1.5"/>
+  <polygon points="248,112 239,108 239,118" fill="#0969da"/>
 
-  <line x1="312" y1="168" x2="312" y2="116" stroke="#388bfd" stroke-width="1.75"/>
-  <polygon points="312,108 307,116 317,116" fill="#388bfd"/>
-  <text x="326" y="142" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=2</text>
+  <line x1="312" y1="188" x2="312" y2="140" stroke="#0969da" stroke-width="1.5"/>
+  <polygon points="312,132 307,140 317,140" fill="#0969da"/>
 
-  <path d="M290,208 C250,236 236,256 256,276" fill="none" stroke="#3fb950" stroke-width="1.75"/>
-  <polygon points="264,276 255,270 259,280" fill="#3fb950"/>
-  <text x="220" y="248" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=4</text>
+  <path d="M290,228 C250,256 236,276 256,296" fill="none" stroke="#8c959f" stroke-width="1.5"/>
+  <polygon points="264,296 255,290 259,300" fill="#8c959f"/>
 
-  <path d="M350,208 C400,240 420,258 438,276" fill="none" stroke="#3fb950" stroke-width="1.75"/>
-  <polygon points="446,276 436,270 440,282" fill="#3fb950"/>
-  <text x="404" y="248" fill="#8b949e" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">n=2</text>
+  <path d="M350,228 C400,260 420,278 438,296" fill="none" stroke="#8c959f" stroke-width="1.5"/>
+  <polygon points="446,296 436,290 440,302" fill="#8c959f"/>
 </svg>
