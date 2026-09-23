@@ -71,4 +71,15 @@ func (m *Memory) ListTraceWindow(_ context.Context, maxTraces int, service strin
 	return SelectWindow(all, maxTraces, service), nil
 }
 
+// ListAttaches implements Store.
+func (m *Memory) ListAttaches(_ context.Context, limit int) ([]Attach, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	all := make([]Span, 0, len(m.order))
+	for _, k := range m.order {
+		all = append(all, m.spans[k])
+	}
+	return attachesFrom(all, limit), nil
+}
+
 var _ Store = (*Memory)(nil)

@@ -1,6 +1,9 @@
 package jobs
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,11 +23,32 @@ func TestPostgresSurvivesReconnect(t *testing.T) {
 		t.Skip(err.Error())
 	}
 	st := NewPostgres(db.Pool())
-	job, err := st.Create(ctx, sampleOpts(t))
+	var job Job
+	for i := 0; i < 8; i++ {
+		n := time.Now().UnixNano() + int64(i)*9973
+		base := fmt.Sprintf("http://127.0.0.1:%d", 20000+int(n%20000))
+		patch := fmt.Sprintf("http://127.0.0.1:%d", 40000+int((n/20000)%20000))
+		job, err = st.Create(ctx, sampleOptsAt(t, base, patch))
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrBusy) {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
 	db.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		clean, err := storage.Open(context.Background(), cfg)
+		if err != nil {
+			return
+		}
+		defer clean.Close()
+		_, _ = NewPostgres(clean.Pool()).Cancel(context.Background(), job.ID)
+	})
 	db2, err := storage.Open(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -95,6 +95,12 @@ func runStep(ctx context.Context, client *http.Client, base string, st Step) Obs
 	return obs
 }
 
+// CheckTarget reports whether raw is an http or https gateway URL.
+func CheckTarget(raw string) error {
+	_, err := parseTarget(raw)
+	return err
+}
+
 func parseTarget(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

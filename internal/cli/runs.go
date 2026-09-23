@@ -20,6 +20,7 @@ type storedRun struct {
 	ArtifactDigest string            `json:"artifact_digest"`
 	BaselineSHA    string            `json:"baseline_sha"`
 	Dirty          bool              `json:"dirty"`
+	Service        string            `json:"service,omitempty"`
 	Artifact       evidence.Artifact `json:"artifact"`
 }
 
@@ -34,6 +35,7 @@ func RunRuns(ctx context.Context, args []string, stdout io.Writer) error {
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	file := fs.String("f", "", "import evidence JSON (does not imply a pass)")
 	limit := fs.Int("limit", runs.DefaultList, "list limit (max 50)")
+	service := fs.String("service", "", "filter by recorded OTEL service.name")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: runs: %w", err)
 	}
@@ -50,7 +52,7 @@ func RunRuns(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	switch len(rest) {
 	case 0:
-		return listRuns(ctx, c, *limit, stdout)
+		return listRuns(ctx, c, *limit, *service, stdout)
 	case 1:
 		return getRun(ctx, c, rest[0], stdout)
 	default:
@@ -73,19 +75,16 @@ func importRun(ctx context.Context, c *Client, path string, stdout io.Writer) er
 	return postRun(ctx, c, a, stdout)
 }
 
-func listRuns(ctx context.Context, c *Client, limit int, stdout io.Writer) error {
+func listRuns(ctx context.Context, c *Client, limit int, service string, stdout io.Writer) error {
 	var body storedRunList
-	if err := c.getJSON(ctx, fmt.Sprintf("/v1/runs?limit=%d", clipRunLimit(limit)), &body); err != nil {
+	if err := c.getJSON(ctx, "/v1/runs"+encodeListQuery(clipRunLimit(limit), service), &body); err != nil {
 		return err
 	}
 	writef(stdout, "runs      n=%d\n", len(body.Runs))
 	for _, r := range body.Runs {
-		if r.Validated {
-			return fmt.Errorf("cli: runs: control plane claimed validated")
-		}
 		writef(stdout, "  %s\n", formatStored(r))
 	}
-	writef(stdout, "not validated. stored runs are not a pass.\n")
+	writef(stdout, "validated is earned; match is not a pass.\n")
 	return nil
 }
 
@@ -98,14 +97,12 @@ func getRun(ctx context.Context, c *Client, id string, stdout io.Writer) error {
 	if err := c.getJSON(ctx, "/v1/runs/"+norm, &body); err != nil {
 		return err
 	}
-	if body.Validated {
-		return fmt.Errorf("cli: runs: control plane claimed validated")
-	}
 	writef(stdout, "run       %s\n", formatStored(body))
 	if body.Artifact.Schema != "" {
 		writeEvidence(stdout, body.Artifact.Result)
+		writeValidated(stdout, body.Validated)
 	} else {
-		writef(stdout, "not validated. stored runs are not a pass.\n")
+		writeValidated(stdout, body.Validated)
 	}
 	return nil
 }
@@ -119,11 +116,8 @@ func postRun(ctx context.Context, c *Client, a evidence.Artifact, stdout io.Writ
 	if err := c.postJSON(ctx, "/v1/runs", "application/json", raw, &out); err != nil {
 		return err
 	}
-	if out.Validated {
-		return fmt.Errorf("cli: runs: control plane claimed validated")
-	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
-	writef(stdout, "not validated. stored runs are not a pass.\n")
+	writeValidated(stdout, out.Validated)
 	return nil
 }
 
@@ -143,11 +137,10 @@ func recordRun(ctx context.Context, api string, stdout io.Writer, a evidence.Art
 		writef(stdout, "unrecorded %s\n", err)
 		return
 	}
-	if out.Validated {
-		writef(stdout, "unrecorded control plane claimed validated\n")
-		return
-	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
+	if out.Validated {
+		writef(stdout, "validated  true\n")
+	}
 }
 
 func formatStored(r storedRun) string {
@@ -158,6 +151,12 @@ func formatStored(r storedRun) string {
 	}
 	if r.Dirty {
 		b.WriteString("  dirty")
+	}
+	if r.Service != "" {
+		b.WriteString("  service=" + r.Service)
+	}
+	if r.Validated {
+		b.WriteString("  validated")
 	}
 	if r.ArtifactDigest != "" {
 		dig := r.ArtifactDigest

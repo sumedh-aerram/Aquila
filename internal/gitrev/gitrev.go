@@ -38,7 +38,7 @@ func State(ctx context.Context, path string) (sha string, dirty bool, err error)
 	if err != nil {
 		return sha, false, nil
 	}
-	return sha, strings.TrimSpace(string(stOut)) != "", nil
+	return sha, len(sourcePorcelain(root, stOut)) > 0, nil
 }
 
 // ChangedPaths lists worktree paths that differ from HEAD, including untracked files.
@@ -54,7 +54,7 @@ func ChangedPaths(ctx context.Context, path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gitrev: status: %w", err)
 	}
-	return porcelainPaths(stOut), nil
+	return porcelainPaths(root, stOut), nil
 }
 
 // UnifiedDiff returns git diff HEAD for path, plus stub hunks for untracked files.
@@ -80,7 +80,7 @@ func UnifiedDiff(ctx context.Context, path string) ([]byte, error) {
 		return nil, fmt.Errorf("gitrev: status: %w", err)
 	}
 	nUntracked := 0
-	for _, p := range porcelainUntracked(stOut) {
+	for _, p := range porcelainUntracked(root, stOut) {
 		if nUntracked >= maxUntracked {
 			break
 		}
@@ -138,11 +138,23 @@ func locate(ctx context.Context, path string) (root, rel string, err error) {
 	return root, rel, nil
 }
 
-func porcelainPaths(out []byte) []string {
+func sourcePorcelain(root string, out []byte) []string {
+	var lines []string
+	for _, line := range strings.Split(string(out), "\n") {
+		p := porcelainPath(line)
+		if p == "" || skipWorktree(root, p) {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func porcelainPaths(root string, out []byte) []string {
 	var paths []string
 	for _, line := range strings.Split(string(out), "\n") {
 		p := porcelainPath(line)
-		if p == "" {
+		if p == "" || skipWorktree(root, p) {
 			continue
 		}
 		paths = append(paths, p)
@@ -153,19 +165,50 @@ func porcelainPaths(out []byte) []string {
 	return paths
 }
 
-func porcelainUntracked(out []byte) []string {
+func porcelainUntracked(root string, out []byte) []string {
 	var paths []string
 	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.HasPrefix(line, "?? ") {
 			continue
 		}
 		p := porcelainPath(line)
-		if p == "" {
+		if p == "" || skipWorktree(root, p) {
 			continue
 		}
 		paths = append(paths, p)
 	}
 	return paths
+}
+
+func skipWorktree(root, rel string) bool {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	if rel == "" || strings.Contains(rel, "..") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(rel))
+	switch ext {
+	case ".exe", ".so", ".dylib", ".a", ".o", ".bin", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip", ".tar", ".gz", ".wasm", ".class", ".jar":
+		return true
+	}
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	st, err := os.Lstat(full)
+	if err != nil {
+		return false
+	}
+	if st.Mode()&os.ModeSymlink != 0 || st.IsDir() {
+		return false
+	}
+	if ext == "" && st.Mode()&0o111 != 0 {
+		return true
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	var buf [512]byte
+	n, _ := f.Read(buf[:])
+	return bytes.IndexByte(buf[:n], 0) >= 0
 }
 
 func porcelainPath(line string) string {

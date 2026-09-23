@@ -2,11 +2,13 @@ package plan
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
 
-// Evidence is executed and skipped DAG steps. Overall is never pass or validated.
+// Evidence is executed and skipped DAG steps. Overall is match, differ, or
+// incomplete — never pass.
 type Evidence struct {
 	Overall string       `json:"overall"`
 	Steps   []StepResult `json:"steps"`
@@ -22,37 +24,93 @@ type StepResult struct {
 	Latency []replay.StepLatency `json:"latency,omitempty"`
 }
 
+type execData struct {
+	envErr     error
+	base       []replay.Result
+	patch      []replay.Result
+	baseBurst  []replay.Result
+	patchBurst []replay.Result
+	tests      StepResult
+	fault      map[string]StepResult
+	workload   replay.Workload
+	baseURL    string
+	patchURL   string
+}
+
 // Execute runs executable DAG steps against base and patch. Operator steps
-// are skipped. Env marked by WithLocalEnv is recorded as prepared, not a pass.
-// Execute does not start Compose and does not inject one-sided 502 as a patch
-// verdict.
+// are skipped. Env probes GET /healthz. Fault is a one-sided inject probe
+// and does not vote overall.
 func Execute(ctx context.Context, dag DAG, base, patch string, w replay.Workload) (Evidence, error) {
+	if err := replay.CheckTarget(base); err != nil {
+		return Evidence{}, err
+	}
+	if err := replay.CheckTarget(patch); err != nil {
+		return Evidence{}, err
+	}
 	ev := Evidence{Notes: append([]string(nil), dag.Notes...)}
 	n, needReplay := replayRepeats(dag)
-	var baseRuns, patchRuns []replay.Result
-	if needReplay {
+	cn, needBurst := concurrencyN(dag)
+	if (needReplay || needBurst) && len(w.Steps) == 0 {
+		return Evidence{}, fmt.Errorf("plan: empty workload")
+	}
+	data := execData{workload: w, baseURL: base, patchURL: patch, fault: map[string]StepResult{}}
+	data.envErr = probeEnv(ctx, dag, base, patch)
+	if data.envErr == nil && needReplay {
 		var err error
-		baseRuns, err = replay.Repeat(ctx, base, w, n)
+		data.base, err = replay.Repeat(ctx, base, w, n)
 		if err != nil {
 			return Evidence{}, err
 		}
-		patchRuns, err = replay.Repeat(ctx, patch, w, n)
+		data.patch, err = replay.Repeat(ctx, patch, w, n)
 		if err != nil {
 			return Evidence{}, err
 		}
 	}
+	if data.envErr == nil && needBurst {
+		var err error
+		data.baseBurst, err = replay.Burst(ctx, base, w, cn)
+		if err != nil {
+			return Evidence{}, err
+		}
+		data.patchBurst, err = replay.Burst(ctx, patch, w, cn)
+		if err != nil {
+			return Evidence{}, err
+		}
+	}
+	if hasKind(dag, KindTests) {
+		data.tests = runTests(ctx, dag)
+	}
 	for _, s := range dag.Steps {
-		ev.Steps = append(ev.Steps, evalStep(s, baseRuns, patchRuns))
+		if s.Kind == KindFaultStatus && !s.Operator {
+			data.fault[s.ID] = probeFault(ctx, s, base, patch, w)
+		}
+	}
+	for _, s := range dag.Steps {
+		ev.Steps = append(ev.Steps, evalStep(s, data))
 	}
 	ev.Overall = overall(ev.Steps)
 	return ev, nil
 }
 
-func evalStep(s Step, base, patch []replay.Result) StepResult {
+func probeEnv(ctx context.Context, dag DAG, base, patch string) error {
+	for _, s := range dag.Steps {
+		if s.Kind == KindEnv && !s.Operator {
+			return replay.Healthz(ctx, base, patch)
+		}
+	}
+	return nil
+}
+
+func evalStep(s Step, data execData) StepResult {
 	out := StepResult{ID: s.ID, Kind: s.Kind}
 	if s.Kind == KindEnv && !s.Operator {
+		if data.envErr != nil {
+			out.Verdict = replay.VerdictIncomplete
+			out.Notes = []string{data.envErr.Error()}
+			return out
+		}
 		out.Verdict = VerdictPrepared
-		out.Notes = []string{"compose"}
+		out.Notes = []string{"healthz"}
 		return out
 	}
 	if s.Operator {
@@ -62,7 +120,7 @@ func evalStep(s Step, base, patch []replay.Result) StepResult {
 	}
 	switch s.Kind {
 	case KindBehavior:
-		rep := compareFirst(base, patch)
+		rep := compareFirst(data.base, data.patch)
 		out.Verdict = rep.Verdict
 		if len(rep.Steps) > 0 {
 			var notes []string
@@ -72,12 +130,12 @@ func evalStep(s Step, base, patch []replay.Result) StepResult {
 			out.Notes = notes
 		}
 	case KindLatency:
-		if len(base) == 0 || len(patch) == 0 {
+		if len(data.base) == 0 || len(data.patch) == 0 {
 			out.Verdict = replay.VerdictIncomplete
 			out.Notes = []string{"no samples"}
 			return out
 		}
-		lat := replay.Latency(base, patch)
+		lat := replay.Latency(data.base, data.patch)
 		out.Latency = lat
 		if !hasSamples(lat) {
 			out.Verdict = replay.VerdictIncomplete
@@ -85,6 +143,21 @@ func evalStep(s Step, base, patch []replay.Result) StepResult {
 			return out
 		}
 		out.Verdict = VerdictSamples
+	case KindConcurrency:
+		got := compareBurst(data.baseBurst, data.patchBurst)
+		got.ID = s.ID
+		return got
+	case KindTests:
+		got := data.tests
+		got.ID = s.ID
+		got.Kind = KindTests
+		return got
+	case KindFaultStatus:
+		if got, ok := data.fault[s.ID]; ok {
+			return got
+		}
+		out.Verdict = replay.VerdictIncomplete
+		out.Notes = []string{"fault not executed"}
 	default:
 		out.Verdict = replay.VerdictIncomplete
 		out.Notes = []string{"unknown step"}
@@ -106,10 +179,13 @@ func overall(steps []StepResult) string {
 	differ := false
 	executed := 0
 	for _, s := range steps {
+		if s.Kind == KindEnv && s.Verdict == replay.VerdictIncomplete {
+			return replay.VerdictIncomplete
+		}
 		if s.Verdict == VerdictSkipped {
 			continue
 		}
-		if s.Kind == KindEnv {
+		if s.Kind == KindEnv || s.Kind == KindFaultStatus {
 			continue
 		}
 		executed++
@@ -137,4 +213,9 @@ func overall(steps []StepResult) string {
 	default:
 		return replay.VerdictMatch
 	}
+}
+
+// Overall is the DAG verdict from executed steps. It is never pass.
+func Overall(steps []StepResult) string {
+	return overall(steps)
 }

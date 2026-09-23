@@ -9,6 +9,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/jobs"
+	"github.com/sumedhaerram/aquila/internal/observability"
 	"github.com/sumedhaerram/aquila/internal/runs"
 	"github.com/sumedhaerram/aquila/internal/source"
 	"github.com/sumedhaerram/aquila/internal/version"
@@ -33,6 +34,7 @@ type Server struct {
 	src      *source.Graph
 	runStore runs.Store
 	jobs     jobs.Store
+	metrics  *observability.Metrics
 	http     *http.Server
 }
 
@@ -41,13 +43,15 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source, runStore: deps.Runs, jobs: deps.Jobs}
+	s := &Server{cfg: cfg, log: log, ready: deps.Ready, spans: deps.Spans, src: deps.Source, runStore: deps.Runs, jobs: deps.Jobs, metrics: observability.NewMetrics()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("GET /metrics", s.metrics.ServeHTTP)
 	mux.HandleFunc("POST /v1/traces", s.handleOTLPTraces)
 	mux.HandleFunc("GET /v1/spans", s.handleListSpans)
+	mux.HandleFunc("GET /v1/attaches", s.handleListAttaches)
 	mux.HandleFunc("GET /v1/graph", s.handleGraph)
 	mux.HandleFunc("GET /v1/source", s.handleSource)
 	mux.HandleFunc("GET /v1/source/neighbors", s.handleSourceNeighbors)
@@ -59,6 +63,7 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	mux.HandleFunc("POST /v1/jobs", s.handleCreateJob)
 	mux.HandleFunc("GET /v1/jobs", s.handleListJobs)
 	mux.HandleFunc("GET /v1/jobs/{id}", s.handleGetJob)
+	mux.HandleFunc("POST /v1/jobs/{id}/cancel", s.handleCancelJob)
 
 	readTimeout := cfg.Server.ReadTimeout
 	if readTimeout <= 0 {
@@ -74,7 +79,7 @@ func NewServer(cfg config.Config, log *slog.Logger, deps Dependencies) *Server {
 	}
 	s.http = &http.Server{
 		Addr:              cfg.Server.Addr,
-		Handler:           mux,
+		Handler:           s.metrics.Wrap(s.withAuth(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

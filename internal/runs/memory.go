@@ -63,16 +63,21 @@ func (m *Memory) Get(ctx context.Context, id string) (Record, error) {
 }
 
 // List implements Store. Newest recorded_at first. Artifact bodies are omitted.
-func (m *Memory) List(ctx context.Context, limit int) ([]Record, error) {
+func (m *Memory) List(ctx context.Context, limit int, service string) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	limit = clipLimit(limit)
+	want := clipService(service)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Record, 0, len(m.order))
 	for _, id := range m.order {
-		out = append(out, m.byID[id])
+		r := m.byID[id]
+		if want != "" && r.Service != want {
+			continue
+		}
+		out = append(out, r)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Recorded.Equal(out[j].Recorded) {
@@ -92,12 +97,13 @@ func summaries(in []Record) []Record {
 		out[i] = Record{
 			ID:             r.ID,
 			Recorded:       r.Recorded,
+			Service:        r.Service,
 			BaselineSHA:    r.BaselineSHA,
 			Dirty:          r.Dirty,
 			WorkloadDigest: r.WorkloadDigest,
 			ArtifactDigest: r.ArtifactDigest,
 			Overall:        r.Overall,
-			Validated:      false,
+			Validated:      r.Validated,
 		}
 	}
 	return out

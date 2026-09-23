@@ -58,6 +58,7 @@ func (s *Server) handleOTLPTraces(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ingest failed"})
 		return
 	}
+	s.metrics.AddIngest(len(rep.Spans), rep.Rejected())
 	out := &coltracepb.ExportTraceServiceResponse{}
 	if n := rep.Rejected(); n > 0 {
 		out.PartialSuccess = &coltracepb.ExportTracePartialSuccess{
@@ -183,6 +184,32 @@ func (s *Server) handleListSpans(w http.ResponseWriter, r *http.Request) {
 		spans = []ingest.Span{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"spans": spans})
+}
+
+func (s *Server) handleListAttaches(w http.ResponseWriter, r *http.Request) {
+	if s.spans == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "ingest unavailable"})
+		return
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
+			return
+		}
+		limit = n
+	}
+	list, err := s.spans.ListAttaches(r.Context(), limit)
+	if err != nil {
+		s.log.Error("list attaches", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list failed"})
+		return
+	}
+	if list == nil {
+		list = []ingest.Attach{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attaches": list})
 }
 
 func clipQuery(s string, n int) string {

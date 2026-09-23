@@ -15,6 +15,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/pair"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -48,6 +49,7 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return err
 	}
+	dag = plan.WithTests(dag, patchModule(ctx, *dir), rep.Files)
 	writef(stdout, "origin   %s  diff=%s\n", origin, src)
 	writeEditPlan(stdout, rep)
 	writePlan(stdout, dag)
@@ -89,8 +91,10 @@ func writePlan(w io.Writer, dag plan.DAG) {
 		}
 		extra := ""
 		switch {
-		case s.Kind == plan.KindLatency:
-			extra = "  n=" + strconv.Itoa(s.N)
+		case s.Kind == plan.KindLatency || s.Kind == plan.KindConcurrency:
+			if s.N > 0 {
+				extra = "  n=" + strconv.Itoa(s.N)
+			}
 		case s.Kind == plan.KindFaultStatus && s.Status > 0:
 			extra = "  status=" + strconv.Itoa(s.Status)
 		}
@@ -115,6 +119,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	fixture := fs.Bool("fixture", false, "use shop smoke fixture instead of span routes")
 	workload := fs.String("workload", "", "operator workload JSON (not derived from traces)")
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
+	smoke := fs.Bool("smoke", false, "latency n=1; cannot validate")
 	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
 	service := fs.String("service", "", "OTEL service.name; scopes span-derived replay")
@@ -154,7 +159,10 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 	if *n > 0 {
 		dag = plan.WithLatencyN(dag, *n)
+	} else if *smoke {
+		dag = plan.WithLatencyN(dag, 1)
 	}
+	dag = plan.WithTests(dag, patchModule(ctx, *dir), rep.Files)
 
 	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, *dir)
 	if err != nil {
@@ -209,12 +217,14 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		Patch:       patchURL,
 		BaselineSHA: sha,
 		Dirty:       dirty,
+		Service:     ingest.ClipService(*service),
 		Workload:    w,
 		Impact:      rep,
 		Plan:        dag,
 		Result:      ev,
 	})
 	writeEvidence(stdout, ev)
+	writeValidated(stdout, art.Validated)
 	if sha != "" {
 		state := "clean"
 		if dirty {
@@ -257,7 +267,15 @@ func writeEvidence(w io.Writer, ev plan.Evidence) {
 	for _, n := range ev.Notes {
 		writef(w, "note         %s\n", n)
 	}
-	writef(w, "not validated. match is not a pass. skipped operator steps are not a pass.\n")
+}
+
+func writeValidated(w io.Writer, ok bool) {
+	writef(w, "validated  %t\n", ok)
+	if ok {
+		writef(w, "required experiments ran on a clean recorded revision. match is not a ship decision.\n")
+		return
+	}
+	writef(w, "not validated. match is not a pass. skipped required steps are not a pass.\n")
 }
 
 func writeEvidenceFile(path string, a evidence.Artifact) error {

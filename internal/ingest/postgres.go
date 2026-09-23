@@ -164,4 +164,39 @@ func (p *Postgres) ListTraceWindow(ctx context.Context, maxTraces int, service s
 	return SelectWindow(out, maxTraces, service), nil
 }
 
+const listAttachesSQL = `
+SELECT service_name, COUNT(*)::int, MAX(start_time)
+  FROM aquila.spans
+ WHERE service_name <> ''
+ GROUP BY service_name
+ ORDER BY MAX(start_time) DESC, service_name ASC
+ LIMIT $1
+`
+
+// ListAttaches implements Store.
+func (p *Postgres) ListAttaches(ctx context.Context, limit int) ([]Attach, error) {
+	if p == nil || p.pool == nil {
+		return nil, fmt.Errorf("postgres ingest is not configured")
+	}
+	rows, err := p.pool.Query(ctx, listAttachesSQL, clipAttaches(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list attaches: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Attach, 0)
+	for rows.Next() {
+		var a Attach
+		if err := rows.Scan(&a.Service, &a.Spans, &a.LastSeen); err != nil {
+			return nil, fmt.Errorf("scan attach: %w", err)
+		}
+		a.Service = ClipService(a.Service)
+		if a.Service == "" {
+			continue
+		}
+		a.LastSeen = a.LastSeen.UTC()
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 var _ Store = (*Postgres)(nil)

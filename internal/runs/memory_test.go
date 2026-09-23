@@ -26,7 +26,7 @@ func TestMemoryInsertGetList(t *testing.T) {
 	if got.Validated || got.ID == "" || got.ArtifactDigest == "" {
 		t.Fatalf("%+v", got)
 	}
-	listed, err := m.List(t.Context(), 10)
+	listed, err := m.List(t.Context(), 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,12 +60,40 @@ func TestMemoryInsertIdempotent(t *testing.T) {
 	if first.ID != second.ID {
 		t.Fatalf("%s vs %s", first.ID, second.ID)
 	}
-	listed, err := m.List(t.Context(), 10)
+	listed, err := m.List(t.Context(), 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(listed) != 1 {
 		t.Fatalf("len=%d", len(listed))
+	}
+}
+
+func TestMemoryListFiltersService(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ledger := evidence.Build(evidence.Input{
+		Now:      time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		Service:  "ledger",
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:   impact.Report{Files: []string{"a.go"}},
+		Result:   plan.Evidence{Overall: replay.VerdictDiffer, Notes: []string{"not validated"}},
+	})
+	shop := sampleArtifact(t, time.Date(2026, 9, 22, 21, 0, 0, 0, time.UTC), replay.VerdictMatch)
+	if _, err := m.Insert(t.Context(), Record{Artifact: ledger}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Insert(t.Context(), Record{Artifact: shop}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.List(t.Context(), 10, "ledger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Service != "ledger" || got[0].Overall != replay.VerdictDiffer {
+		t.Fatalf("%+v", got)
 	}
 }
 

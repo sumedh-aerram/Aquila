@@ -65,9 +65,9 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		Question: q,
 		Origin:   origin,
 		Services: serviceNames(rt),
-		Hops:     hopLines(rt),
-		Paths:    pathLines(rt),
-		Binds:    bindLines(loc),
+		Hops:     hopsFrom(rt),
+		Paths:    pathsFrom(rt),
+		Binds:    bindsFrom(loc),
 		Routes:   routeFacts(spans),
 	}
 	if len(diffRaw) > 0 {
@@ -114,33 +114,37 @@ func serviceNames(rt graph.Snapshot) []string {
 	return out
 }
 
-func hopLines(rt graph.Snapshot) []string {
-	out := make([]string, 0, len(rt.Edges))
+func hopsFrom(rt graph.Snapshot) []investigate.Hop {
+	out := make([]investigate.Hop, 0, len(rt.Edges))
 	for _, e := range rt.Edges {
-		out = append(out, e.From+" -> "+e.To)
+		out = append(out, investigate.Hop{From: e.From, To: e.To, Provenance: e.Provenance})
 	}
 	return out
 }
 
-func pathLines(rt graph.Snapshot) []string {
-	out := make([]string, 0, len(rt.Paths))
+func pathsFrom(rt graph.Snapshot) []investigate.Path {
+	out := make([]investigate.Path, 0, len(rt.Paths))
 	for _, p := range rt.Paths {
-		out = append(out, strings.Join(p.Services, " -> "))
+		out = append(out, investigate.Path{Services: p.Services, Provenance: p.Provenance})
 	}
 	return out
 }
 
-func bindLines(loc locate.Snapshot) []string {
-	out := make([]string, 0, len(loc.Bindings))
+func bindsFrom(loc locate.Snapshot) []investigate.Bind {
+	out := make([]investigate.Bind, 0, len(loc.Bindings))
 	for _, b := range loc.Bindings {
-		line := strings.TrimSpace(b.ServiceName + " " + b.SourceName + " " + b.File)
-		if b.Line > 0 {
-			line += fmt.Sprintf(":%d", b.Line)
-		}
+		route := ""
 		if r := strings.TrimSpace(b.HTTPMethod + " " + b.HTTPRoute); strings.Contains(r, "/") {
-			line += " " + strings.ToUpper(strings.TrimSpace(b.HTTPMethod)) + " " + strings.TrimSpace(b.HTTPRoute)
+			route = strings.ToUpper(strings.TrimSpace(b.HTTPMethod)) + " " + strings.TrimSpace(b.HTTPRoute)
 		}
-		out = append(out, line)
+		out = append(out, investigate.Bind{
+			Service:    b.ServiceName,
+			Name:       b.SourceName,
+			File:       b.File,
+			Route:      route,
+			Provenance: b.Provenance,
+			Line:       b.Line,
+		})
 	}
 	return out
 }

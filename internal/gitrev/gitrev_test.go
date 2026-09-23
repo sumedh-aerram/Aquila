@@ -75,6 +75,39 @@ func TestStateHEADAndDirty(t *testing.T) {
 	}
 }
 
+func TestUnifiedDiffSkipsUntrackedBinary(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	runGit(t, dir, "-c", "user.email=aquila@test", "-c", "user.name=aquila", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "init")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ledger"), []byte{0x7f, 'E', 'L', 'F', 0}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := UnifiedDiff(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte("main.go")) {
+		t.Fatalf("source missing:\n%s", raw)
+	}
+	if bytes.Contains(raw, []byte("ledger")) {
+		t.Fatalf("binary leaked:\n%s", raw)
+	}
+	paths, err := ChangedPaths(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "main.go" {
+		t.Fatalf("paths=%v", paths)
+	}
+}
+
 func TestUnifiedDiffTrackedHunk(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {

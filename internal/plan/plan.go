@@ -11,9 +11,12 @@ const (
 	KindEnv         = "env"
 	KindBehavior    = "behavior"
 	KindLatency     = "latency"
+	KindConcurrency = "concurrency"
+	KindTests       = "tests"
 	KindFaultStatus = "fault_status"
 
-	DefaultLatencyN = 20
+	DefaultLatencyN     = 20
+	DefaultConcurrencyN = 8
 )
 
 const (
@@ -36,12 +39,14 @@ type Step struct {
 
 // DAG is the smallest experiment set Aquila can currently execute or name.
 type DAG struct {
-	Steps []Step   `json:"steps"`
-	Notes []string `json:"notes,omitempty"`
+	Steps        []Step   `json:"steps"`
+	Notes        []string `json:"notes,omitempty"`
+	Module       string   `json:"module,omitempty"`
+	TestPackages []string `json:"test_packages,omitempty"`
 }
 
-// FromImpact builds a DAG from impact findings. It does not invent tests,
-// concurrency, or a pass threshold.
+// FromImpact builds a DAG from impact findings. Tests are added later via
+// WithTests when a Go module is on the operator machine.
 func FromImpact(rep impact.Report) (DAG, error) {
 	if len(rep.Files) == 0 && len(rep.Direct) == 0 && len(rep.Likely) == 0 && len(rep.Runtime) == 0 && len(rep.Unobserved) == 0 {
 		return DAG{}, fmt.Errorf("plan: empty impact")
@@ -52,8 +57,7 @@ func FromImpact(rep impact.Report) (DAG, error) {
 				ID:       "env",
 				Kind:     KindEnv,
 				Required: true,
-				Operator: true,
-				Reason:   "isolated baseline and patch trees; compose is not started",
+				Reason:   "GET /healthz on baseline and patch; compose is a local shop path",
 			},
 			{
 				ID:        "behavior",
@@ -72,22 +76,31 @@ func FromImpact(rep impact.Report) (DAG, error) {
 			},
 		},
 		Notes: []string{
-			"not validated. no pass threshold. no impacted tests.",
+			"not validated until required executable steps succeed on a clean recorded revision. match is not a pass.",
 		},
 	}
 	if hasRuntime(rep) {
-		dag.Steps = append(dag.Steps, Step{
-			ID:        "fault_status",
-			Kind:      KindFaultStatus,
-			Required:  true,
-			Operator:  true,
-			Status:    502,
-			DependsOn: []string{"env"},
-			Reason:    "same 502 spec on both revisions is tautological with ingress inject; one-sided 502 is a probe via aquila fault, not a patch verdict",
-		})
-		dag.Notes = append(dag.Notes, "fault is operator; equivalent dependency inject is not available without a mesh")
+		dag.Steps = append(dag.Steps,
+			Step{
+				ID:        "concurrency",
+				Kind:      KindConcurrency,
+				Required:  true,
+				N:         DefaultConcurrencyN,
+				DependsOn: []string{"env"},
+				Reason:    "parallel replay error-rate compare; not a latency threshold",
+			},
+			Step{
+				ID:        "fault_status",
+				Kind:      KindFaultStatus,
+				Required:  false,
+				Status:    502,
+				DependsOn: []string{"env"},
+				Reason:    "one-sided 502 inject on patch via loopback proxy; probe, not a patch verdict",
+			},
+		)
+		dag.Notes = append(dag.Notes, "fault is a one-sided inject probe and does not vote overall")
 	} else {
-		dag.Notes = append(dag.Notes, "fault omitted: no observed runtime path")
+		dag.Notes = append(dag.Notes, "concurrency and fault omitted: no observed runtime path")
 	}
 	return dag, nil
 }
@@ -115,7 +128,7 @@ func WithLocalEnv(dag DAG) DAG {
 			continue
 		}
 		steps[i].Operator = false
-		steps[i].Reason = "isolated shop pair started by aquila; traces stay out of the live store"
+		steps[i].Reason = "isolated shop pair started by aquila; GET /healthz; traces stay out of the live store"
 	}
 	dag.Steps = steps
 	return dag
@@ -123,6 +136,15 @@ func WithLocalEnv(dag DAG) DAG {
 
 func hasRuntime(rep impact.Report) bool {
 	return len(rep.Runtime) > 0
+}
+
+func hasKind(dag DAG, kind string) bool {
+	for _, s := range dag.Steps {
+		if s.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func replayRepeats(dag DAG) (n int, need bool) {
@@ -139,6 +161,20 @@ func replayRepeats(dag DAG) (n int, need bool) {
 			if s.N > n {
 				n = s.N
 			}
+		}
+	}
+	return n, need
+}
+
+func concurrencyN(dag DAG) (n int, need bool) {
+	n = DefaultConcurrencyN
+	for _, s := range dag.Steps {
+		if s.Operator || s.Kind != KindConcurrency {
+			continue
+		}
+		need = true
+		if s.N > 0 {
+			n = s.N
 		}
 	}
 	return n, need

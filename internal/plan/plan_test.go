@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,12 +38,12 @@ func TestFromImpactAlwaysBehaviorAndLatency(t *testing.T) {
 	if strings.Contains(joined, "validated.") && !strings.Contains(joined, "not validated") {
 		t.Fatal("must not claim validated")
 	}
-	if hasKind(dag, "concurrency") || hasKind(dag, "tests") || hasKind(dag, "ask") {
-		t.Fatal("must not invent later experiment classes")
+	if hasKind(dag, KindConcurrency) || hasKind(dag, KindTests) || hasKind(dag, KindFaultStatus) {
+		t.Fatal("concurrency, tests, and fault require runtime or WithTests")
 	}
 }
 
-func TestFromImpactIncludesOperatorFaultWhenRuntime(t *testing.T) {
+func TestFromImpactIncludesConcurrencyAndFaultWhenRuntime(t *testing.T) {
 	t.Parallel()
 	dag, err := FromImpact(impact.Report{
 		Files:   []string{"internal/payment/handler.go"},
@@ -51,14 +53,20 @@ func TestFromImpactIncludesOperatorFaultWhenRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fault Step
+	var fault, conc Step
 	for _, s := range dag.Steps {
-		if s.Kind == KindFaultStatus {
+		switch s.Kind {
+		case KindFaultStatus:
 			fault = s
+		case KindConcurrency:
+			conc = s
 		}
 	}
-	if !fault.Operator || fault.Status != 502 {
-		t.Fatalf("%+v", fault)
+	if fault.Operator || fault.Required || fault.Status != 502 {
+		t.Fatalf("fault %+v", fault)
+	}
+	if conc.Operator || !conc.Required || conc.N != DefaultConcurrencyN {
+		t.Fatalf("concurrency %+v", conc)
 	}
 }
 
@@ -98,17 +106,60 @@ func TestWithLocalEnv(t *testing.T) {
 		}
 	}
 	for _, s := range dag.Steps {
-		if s.Kind == KindEnv && !s.Operator {
-			t.Fatal("WithLocalEnv must not mutate the original")
+		if s.Kind == KindEnv && s.Operator {
+			t.Fatal("FromImpact env must already be executable")
 		}
 	}
 }
 
-func hasKind(dag DAG, kind string) bool {
+func TestFromImpactEnvIsExecutable(t *testing.T) {
+	t.Parallel()
+	dag, err := FromImpact(impact.Report{Files: []string{"a.go"}, Direct: []impact.Finding{{Name: "F"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, s := range dag.Steps {
-		if s.Kind == kind {
-			return true
+		if s.Kind == KindEnv && (s.Operator || !s.Required) {
+			t.Fatalf("%+v", s)
 		}
 	}
-	return false
+}
+
+func TestWithTestsAddsStepWhenPackagesExist(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/t\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(root, "p")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "p.go"), []byte("package p\nfunc F() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dag, err := FromImpact(impact.Report{Files: []string{"p/p.go"}, Direct: []impact.Finding{{Name: "F"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := WithTests(dag, root, []string{"p/p.go"})
+	if !hasKind(got, KindTests) || len(got.TestPackages) != 1 || got.TestPackages[0] != "./p" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestWithTestsOmitsMissingPackages(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/t\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dag, err := FromImpact(impact.Report{Files: []string{"p/p.go"}, Direct: []impact.Finding{{Name: "F"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := WithTests(dag, root, []string{"p/p.go"})
+	if hasKind(got, KindTests) {
+		t.Fatal("must not add tests without packages on disk")
+	}
 }

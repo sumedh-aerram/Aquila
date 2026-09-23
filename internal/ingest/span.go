@@ -47,6 +47,7 @@ type Store interface {
 	UpsertSpans(ctx context.Context, spans []Span) error
 	ListSpans(ctx context.Context, q ListQuery) ([]Span, error)
 	ListTraceWindow(ctx context.Context, maxTraces int, service string) ([]Span, error)
+	ListAttaches(ctx context.Context, limit int) ([]Attach, error)
 }
 
 func normalizeLimit(n int) int {

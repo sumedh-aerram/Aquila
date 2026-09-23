@@ -89,6 +89,8 @@ func writeFinding(w io.Writer, f impact.Finding) {
 			return
 		}
 		writef(w, "  %s  %s  %s  %s  %s  %s\n", svc, f.Route, f.Name, loc, f.Reason, f.Provenance)
+	case f.Reason == "observed_path" && f.Path != "":
+		writef(w, "  path  %s  %s\n", f.Path, f.Provenance)
 	case f.Service != "":
 		writef(w, "  %s  %s  %s  %s\n", f.Service, f.Name, f.Reason, f.Provenance)
 	case f.Path != "":

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/runs"
 )
 
@@ -19,6 +20,7 @@ type runCreated struct {
 	ArtifactDigest string `json:"artifact_digest"`
 	BaselineSHA    string `json:"baseline_sha,omitempty"`
 	Dirty          bool   `json:"dirty,omitempty"`
+	Service        string `json:"service,omitempty"`
 }
 
 type runListResponse struct {
@@ -65,7 +67,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
-	if rec.Validated {
+	if rec.Validated && rec.Overall != "match" {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
@@ -86,7 +88,8 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	list, err := s.runStore.List(r.Context(), limit)
+	service := ingest.ClipService(r.URL.Query().Get("service"))
+	list, err := s.runStore.List(r.Context(), limit, service)
 	if err != nil {
 		s.log.Error("list runs", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
@@ -94,7 +97,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]runCreated, 0, len(list))
 	for _, rec := range list {
-		if rec.Validated {
+		if rec.Validated && rec.Overall != "match" {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 			return
 		}
@@ -123,14 +126,14 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
-	if rec.Validated {
+	if rec.Validated && rec.Overall != "match" {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, runGetResponse{
 		ID:             rec.ID,
 		Overall:        rec.Overall,
-		Validated:      false,
+		Validated:      rec.Validated,
 		ArtifactDigest: rec.ArtifactDigest,
 		BaselineSHA:    rec.BaselineSHA,
 		Dirty:          rec.Dirty,
@@ -142,9 +145,10 @@ func summaryFrom(rec runs.Record) runCreated {
 	return runCreated{
 		ID:             rec.ID,
 		Overall:        rec.Overall,
-		Validated:      false,
+		Validated:      rec.Validated,
 		ArtifactDigest: rec.ArtifactDigest,
 		BaselineSHA:    rec.BaselineSHA,
 		Dirty:          rec.Dirty,
+		Service:        rec.Service,
 	}
 }

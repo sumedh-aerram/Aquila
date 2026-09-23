@@ -36,13 +36,19 @@ vendor/
 executor/aquila-exec
 executor/aquila-exec-test
 
+# Terraform local state and secrets (sources in deploy/terraform/ are tracked)
+deploy/terraform/.terraform/
+deploy/terraform/*.tfstate
+deploy/terraform/*.tfstate.*
+deploy/terraform/terraform.tfvars
+deploy/terraform/crash.log
+
 # Empty phase placeholders
 **/.gitkeep
 /benchmarks/
 /chaos/
 /proto/
 /web/
-/deploy/terraform/
 /deploy/kubernetes/
 /internal/traces/
 /internal/artifacts/

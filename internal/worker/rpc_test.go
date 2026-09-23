@@ -33,7 +33,7 @@ func TestGRPCRejectsStaleAttempt(t *testing.T) {
 	if err != nil || a.Empty {
 		t.Fatalf("%v %+v", err, a)
 	}
-	_, err = st.RequeueExpired(t.Context(), time.Now().UTC().Add(15*time.Minute))
+	_, err = st.RequeueExpired(t.Context(), time.Now().UTC().Add(30*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/jobs"
 )
 
@@ -37,6 +38,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	job, err := s.jobs.Create(r.Context(), opts)
 	if err != nil {
+		if errors.Is(err, jobs.ErrBusy) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "gateway occupied"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job"})
 		return
 	}
@@ -66,7 +71,8 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	list, err := s.jobs.List(r.Context(), limit)
+	service := ingest.ClipService(r.URL.Query().Get("service"))
+	list, err := s.jobs.List(r.Context(), limit, service)
 	if err != nil {
 		s.log.Error("list jobs", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
@@ -82,6 +88,24 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	job, err := s.jobs.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if s.jobs == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "jobs unavailable"})
+		return
+	}
+	id := r.PathValue("id")
+	job, err := s.jobs.Cancel(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, jobs.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})

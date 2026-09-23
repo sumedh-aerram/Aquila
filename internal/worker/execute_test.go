@@ -33,10 +33,27 @@ func TestExecuteBehaviorMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lease.Task.Kind != plan.KindBehavior {
+	if lease.Task.Kind != plan.KindEnv {
 		t.Fatalf("%s", lease.Task.Kind)
 	}
 	res, err := Execute(t.Context(), lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Verdict != plan.VerdictPrepared {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := st.Commit(t.Context(), lease.Task.ID, lease.Attempt, res, ""); err != nil {
+		t.Fatal(err)
+	}
+	lease, err = st.Lease(t.Context(), jobs.Worker{ID: "w1"}, nowUTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Task.Kind != plan.KindBehavior {
+		t.Fatalf("%s", lease.Task.Kind)
+	}
+	res, err = Execute(t.Context(), lease)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +105,7 @@ func TestExecuteCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Verdict != second.Verdict || second.Verdict != replay.VerdictMatch {
+	if first.Verdict != second.Verdict || second.Verdict != plan.VerdictPrepared {
 		t.Fatalf("%+v %+v", first, second)
 	}
 }

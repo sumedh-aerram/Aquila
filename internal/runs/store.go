@@ -11,18 +11,20 @@ import (
 )
 
 const (
-	DefaultList = 20
-	MaxList     = 50
-	idLen       = 16
+	DefaultList    = 20
+	MaxList        = 50
+	idLen          = 16
+	maxServiceName = 128
 )
 
 // ErrNotFound is returned when a run id does not exist.
 var ErrNotFound = errors.New("runs: not found")
 
-// Record is one persisted experiment. Validated is always false.
+// Record is one persisted experiment. Validated is earned, not claimed.
 type Record struct {
 	ID             string
 	Recorded       time.Time
+	Service        string
 	BaselineSHA    string
 	Dirty          bool
 	WorkloadDigest string
@@ -36,16 +38,13 @@ type Record struct {
 type Store interface {
 	Insert(ctx context.Context, rec Record) (Record, error)
 	Get(ctx context.Context, id string) (Record, error)
-	List(ctx context.Context, limit int) ([]Record, error)
+	List(ctx context.Context, limit int, service string) ([]Record, error)
 }
 
 // FromArtifact builds a record from checked evidence. The id is the artifact digest prefix.
 func FromArtifact(a evidence.Artifact) (Record, error) {
 	if err := evidence.Check(a); err != nil {
 		return Record{}, err
-	}
-	if a.Validated {
-		return Record{}, fmt.Errorf("runs: validated must be false")
 	}
 	if a.ArtifactDigest == "" {
 		return Record{}, fmt.Errorf("runs: missing artifact digest")
@@ -57,12 +56,13 @@ func FromArtifact(a evidence.Artifact) (Record, error) {
 	return Record{
 		ID:             id,
 		Recorded:       a.Recorded.UTC(),
+		Service:        a.Service,
 		BaselineSHA:    a.BaselineSHA,
 		Dirty:          a.Dirty,
 		WorkloadDigest: a.WorkloadDigest,
 		ArtifactDigest: a.ArtifactDigest,
 		Overall:        a.Result.Overall,
-		Validated:      false,
+		Validated:      a.Validated,
 		Artifact:       a,
 	}, nil
 }
@@ -93,4 +93,12 @@ func clipLimit(n int) int {
 		return MaxList
 	}
 	return n
+}
+
+func clipService(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxServiceName {
+		s = s[:maxServiceName]
+	}
+	return s
 }

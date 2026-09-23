@@ -104,6 +104,36 @@ func TestPostgresListTraceWindow(t *testing.T) {
 	}
 }
 
+func TestPostgresListAttaches(t *testing.T) {
+	p := openTestPostgres(t)
+	h := sha256.Sum256([]byte(t.Name()))
+	traceID := hex.EncodeToString(h[:16])
+	t.Cleanup(func() {
+		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id = $1`, traceID)
+	})
+	now := time.Unix(50, 0).UTC()
+	if err := p.UpsertSpans(t.Context(), []Span{
+		{TraceID: traceID, SpanID: hex.EncodeToString(h[:8]), ServiceName: "ledger", StartTime: now},
+		{TraceID: traceID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: "ledger", StartTime: now.Add(time.Second)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ListAttaches(t.Context(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found Attach
+	for _, a := range got {
+		if a.Service == "ledger" {
+			found = a
+			break
+		}
+	}
+	if found.Spans < 2 {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestPostgresListTraceWindowServiceDropsOtherAttach(t *testing.T) {
 	p := openTestPostgres(t)
 	h := sha256.Sum256([]byte(t.Name()))

@@ -131,6 +131,57 @@ func TestCreateRunIdempotent(t *testing.T) {
 	}
 }
 
+func TestListRunsByService(t *testing.T) {
+	t.Parallel()
+	store := runs.NewMemory()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Runs: store})
+	ledger := evidence.Build(evidence.Input{
+		Now:         time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
+		Baseline:    "http://127.0.0.1:18180",
+		Patch:       "http://127.0.0.1:18280",
+		BaselineSHA: "deadbeef",
+		Service:     "ledger",
+		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:      impact.Report{Files: []string{"a.go"}},
+		Plan:        plan.DAG{},
+		Result:      plan.Evidence{Overall: replay.VerdictDiffer, Notes: []string{"not validated"}},
+	})
+	shop := evidence.Build(evidence.Input{
+		Now:         time.Date(2026, 9, 22, 21, 0, 0, 0, time.UTC),
+		Baseline:    "http://127.0.0.1:18180",
+		Patch:       "http://127.0.0.1:18280",
+		BaselineSHA: "deadbeef",
+		Service:     "shop",
+		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:      impact.Report{Files: []string{"a.go"}},
+		Plan:        plan.DAG{},
+		Result:      plan.Evidence{Overall: replay.VerdictMatch, Notes: []string{"not validated"}},
+	})
+	for _, a := range []evidence.Artifact{ledger, shop} {
+		raw, err := evidence.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(raw)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/runs?service=ledger", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body runListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Runs) != 1 || body.Runs[0].Service != "ledger" || body.Runs[0].Overall != replay.VerdictDiffer {
+		t.Fatalf("%+v", body.Runs)
+	}
+}
+
 func runArtifact(t *testing.T, overall string) evidence.Artifact {
 	t.Helper()
 	return evidence.Build(evidence.Input{

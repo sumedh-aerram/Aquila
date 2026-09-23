@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sumedhaerram/aquila/internal/impact"
@@ -29,8 +31,8 @@ func TestExecuteMatchIsNotPass(t *testing.T) {
 	if ev.Overall == "pass" || ev.Overall == "PASS" || ev.Overall == "validated" {
 		t.Fatal("must not report pass")
 	}
-	if stepVerdict(ev, KindEnv) != VerdictSkipped {
-		t.Fatal("env must stay operator")
+	if stepVerdict(ev, KindEnv) != VerdictPrepared {
+		t.Fatal("env must probe healthz")
 	}
 	if stepVerdict(ev, KindLatency) != VerdictSamples {
 		t.Fatalf("latency: %+v", ev)
@@ -85,8 +87,11 @@ func TestExecuteJSONDifference(t *testing.T) {
 	if ev.Overall != replay.VerdictDiffer {
 		t.Fatalf("extra json field must differ: %+v", ev)
 	}
-	if stepVerdict(ev, KindFaultStatus) != VerdictSkipped {
-		t.Fatal("fault must not be auto-executed as a patch verdict")
+	if stepVerdict(ev, KindFaultStatus) != VerdictPrepared {
+		t.Fatalf("fault probe: %+v", ev)
+	}
+	if ev.Overall != replay.VerdictDiffer {
+		t.Fatalf("fault must not override json differ: %+v", ev)
 	}
 }
 
@@ -147,6 +152,51 @@ func TestFasterPatchDoesNotDiffer(t *testing.T) {
 	}
 	if stepVerdict(ev, KindBehavior) == replay.VerdictDiffer {
 		t.Fatal("latency must not vote as a behavior differ")
+	}
+}
+
+func TestExecuteConcurrencyAndTests(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/t\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(root, "p")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "p.go"), []byte("package p\nfunc F() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "p_test.go"), []byte("package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif F() != 1 {\n\t\tt.Fatal()\n\t}\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"status": "ok"})
+	}))
+	t.Cleanup(srv.Close)
+	dag := mustDAG(t, impact.Report{
+		Files:   []string{"p/p.go"},
+		Direct:  []impact.Finding{{Name: "F"}},
+		Runtime: []impact.Finding{{Path: "gateway -> payment", Reason: "observed_path"}},
+	})
+	dag = WithTests(WithLatencyN(dag, 1), root, []string{"p/p.go"})
+	w := replay.Workload{Steps: []replay.Step{{Method: http.MethodGet, Path: "/healthz"}}}
+	ev, err := Execute(t.Context(), dag, srv.URL, srv.URL, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Overall != replay.VerdictMatch {
+		t.Fatalf("%+v", ev)
+	}
+	if stepVerdict(ev, KindTests) != VerdictPrepared {
+		t.Fatalf("tests: %+v", ev)
+	}
+	if stepVerdict(ev, KindConcurrency) != replay.VerdictMatch {
+		t.Fatalf("concurrency: %+v", ev)
+	}
+	if stepVerdict(ev, KindFaultStatus) != VerdictPrepared {
+		t.Fatalf("fault: %+v", ev)
 	}
 }
 

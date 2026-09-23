@@ -70,11 +70,22 @@ func (e *httpStatusError) Error() string {
 	return fmt.Sprintf("cli: %s %s: status %d", e.method, e.path, e.status)
 }
 
+func (c *Client) setAuth(req *http.Request) {
+	if t := envToken(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+}
+
+func envToken() string {
+	return strings.TrimSpace(os.Getenv("AQUILA_API_TOKEN"))
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, dest any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return fmt.Errorf("cli: %w", err)
 	}
+	c.setAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("cli: GET %s: %w", path, err)
@@ -99,6 +110,7 @@ func (c *Client) postJSON(ctx context.Context, path, contentType string, body []
 		return fmt.Errorf("cli: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
+	c.setAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("cli: POST %s: %w", path, err)

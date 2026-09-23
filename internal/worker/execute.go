@@ -22,6 +22,11 @@ func ExecuteWith(ctx context.Context, lease jobs.Lease, cache *action.Cache) (pl
 	if err := ctx.Err(); err != nil {
 		return plan.StepResult{}, err
 	}
+	if !lease.Job.Deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, lease.Job.Deadline)
+		defer cancel()
+	}
 	if lease.Task.Operator {
 		return plan.StepResult{}, fmt.Errorf("worker: operator task")
 	}

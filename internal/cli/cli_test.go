@@ -65,6 +65,28 @@ func TestRunStatusReady(t *testing.T) {
 	}
 }
 
+func TestRunAttaches(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/attaches" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{"attaches": []map[string]any{
+			{"service": "ledger", "spans": 40, "last_seen": "2026-09-23T00:00:00Z"},
+		}})
+	}))
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	if err := RunAttaches(t.Context(), []string{"-api", srv.URL}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "ledger") || !strings.Contains(got, "spans=40") || !strings.Contains(got, "not tenants") {
+		t.Fatalf("%s", got)
+	}
+}
+
 func TestRunStatusNotReady(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -512,7 +534,7 @@ func (s *syncWriter) String() string {
 	return s.b.String()
 }
 
-func TestRunPlanPrintsOperatorFaultWhenRuntime(t *testing.T) {
+func TestRunPlanPrintsFaultAndConcurrencyWhenRuntime(t *testing.T) {
 	t.Parallel()
 	api := impactAPI(t, impact.Report{
 		Files:   []string{"internal/payment/handler.go"},
@@ -525,8 +547,11 @@ func TestRunPlanPrintsOperatorFaultWhenRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "fault_status") || !strings.Contains(got, "operator") {
+	if !strings.Contains(got, "fault_status") || !strings.Contains(got, "concurrency") {
 		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "operator") && strings.Contains(got, "fault_status") && !strings.Contains(got, "execute") {
+		t.Fatalf("fault should execute: %s", got)
 	}
 	if !strings.Contains(got, "not validated") {
 		t.Fatalf("%s", got)
@@ -595,8 +620,11 @@ func TestRunExperimentMatchIsNotPass(t *testing.T) {
 	if !strings.Contains(got, "overall=match") {
 		t.Fatalf("%s", got)
 	}
-	if !strings.Contains(got, "skipped") || !strings.Contains(got, "fault_status") {
-		t.Fatalf("operator fault must be skipped: %s", got)
+	if !strings.Contains(got, "fault_status") || !strings.Contains(got, "prepared") {
+		t.Fatalf("fault probe must run: %s", got)
+	}
+	if !strings.Contains(got, "concurrency") {
+		t.Fatalf("%s", got)
 	}
 	if strings.Contains(got, "overall=pass") || strings.Contains(got, "verdict=pass") {
 		t.Fatalf("must not report pass: %s", got)
@@ -910,7 +938,7 @@ func TestRunExperimentRecordsRun(t *testing.T) {
 	if strings.Contains(got, "overall=pass") {
 		t.Fatalf("%s", got)
 	}
-	listed, err := store.List(t.Context(), 10)
+	listed, err := store.List(t.Context(), 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,7 +973,7 @@ func TestRunRunsImportAndGet(t *testing.T) {
 	if !strings.Contains(out.String(), "stored") || strings.Contains(out.String(), "overall=pass") {
 		t.Fatalf("%s", out.String())
 	}
-	listed, err := store.List(t.Context(), 10)
+	listed, err := store.List(t.Context(), 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -998,6 +1026,9 @@ func TestRunAskHitsCheckout(t *testing.T) {
 	if !strings.Contains(got, "checkout") || !strings.Contains(got, "facts only") {
 		t.Fatalf("%s", got)
 	}
+	if !strings.Contains(got, "observed_parent") {
+		t.Fatalf("%s", got)
+	}
 	if strings.Contains(got, "overall=pass") {
 		t.Fatalf("%s", got)
 	}
@@ -1011,6 +1042,33 @@ func TestRunAskRequiresQuestion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "question required") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestRunWorkflowPlanOnly(t *testing.T) {
+	t.Parallel()
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"internal/payment/handler.go"},
+		Direct: []impact.Finding{{Name: "chargeProcessor", File: "internal/payment/handler.go", Reason: "changed_lines"}},
+	})
+	shop := filepath.Clean(filepath.Join("..", "..", "examples", "shop"))
+	var out strings.Builder
+	err := RunWorkflow(t.Context(), []string{
+		"-api", api.URL, "-dir", shop, "-plan-only", "-f", filepath.Join("..", "..", "internal", "pair", "testdata", "d1.diff"),
+		"checkout",
+	}, strings.NewReader(""), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "ask") || !strings.Contains(got, "plan") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "svcclient.Shared()") && !strings.Contains(got, "no candidate") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "experiment  overall=") {
+		t.Fatalf("plan-only must not execute: %s", got)
 	}
 }
 
@@ -1110,7 +1168,7 @@ func experimentAPI(t *testing.T, rep impact.Report) (*httptest.Server, *runs.Mem
 				"artifact_digest": rec.ArtifactDigest, "baseline_sha": rec.BaselineSHA, "dirty": rec.Dirty,
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs":
-			list, err := store.List(r.Context(), runs.DefaultList)
+			list, err := store.List(r.Context(), runs.DefaultList, "")
 			if err != nil {
 				http.Error(w, "store failed", http.StatusInternalServerError)
 				return
@@ -1149,6 +1207,12 @@ func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
 		switch {
 		case r.URL.Path == "/v1/spans":
 			writeTestJSON(w, map[string]any{"spans": []any{}})
+		case r.URL.Path == "/v1/graph":
+			writeTestJSON(w, graph.Snapshot{})
+		case r.URL.Path == "/v1/source":
+			writeTestJSON(w, source.Snapshot{})
+		case r.URL.Path == "/v1/locate":
+			writeTestJSON(w, locate.Snapshot{})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/impact":
 			writeTestJSON(w, rep)
 		default:

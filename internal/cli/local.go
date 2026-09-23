@@ -151,6 +151,21 @@ func windowQuery(traces int, service string) string {
 	return "?" + q.Encode()
 }
 
+func encodeListQuery(limit int, service string) string {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if s := ingest.ClipService(service); s != "" {
+		q.Set("service", s)
+	}
+	enc := q.Encode()
+	if enc == "" {
+		return ""
+	}
+	return "?" + enc
+}
+
 func fetchSpans(ctx context.Context, api string, traces int, service string) ([]ingest.Span, error) {
 	c, err := newClient(api)
 	if err != nil {

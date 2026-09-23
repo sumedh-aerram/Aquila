@@ -49,14 +49,20 @@ func buildJob(opts CreateOpts) (Job, error) {
 		tasks = append(tasks, t)
 	}
 	settle(tasks)
+	deadline := opts.Deadline.UTC()
+	if deadline.IsZero() {
+		deadline = now.Add(DefaultDeadline)
+	}
 	return Job{
 		ID:          id,
 		Created:     now,
 		Status:      jobStatus(tasks),
+		Service:     clipService(opts.Service),
 		Baseline:    opts.Baseline,
 		Patch:       opts.Patch,
 		BaselineSHA: opts.BaselineSHA,
 		Dirty:       opts.Dirty,
+		Deadline:    deadline,
 		Workload:    workloadOf(opts.Workload),
 		Plan:        opts.Plan,
 		Tasks:       tasks,
@@ -178,12 +184,20 @@ func countLeased(jobs []Job, workerID string) int {
 	return n
 }
 
-func requeue(t *Task, now time.Time) bool {
+func requeue(t *Task, now time.Time, canceled bool) bool {
 	if t.State != StateLeased {
 		return false
 	}
 	if t.LeaseUntil.IsZero() || !t.LeaseUntil.Before(now) {
 		return false
+	}
+	if canceled {
+		t.State = StateSkipped
+		t.Err = "canceled"
+		t.AttemptID = ""
+		t.WorkerID = ""
+		t.LeaseUntil = time.Time{}
+		return true
 	}
 	t.State = StateReady
 	t.AttemptID = ""

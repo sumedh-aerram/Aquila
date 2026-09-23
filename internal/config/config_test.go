@@ -18,9 +18,11 @@ func clearConfigEnv(t *testing.T) {
 		"AQUILA_POSTGRES_MAX_CONNS",
 		"AQUILA_POSTGRES_CONNECT_TIMEOUT",
 		"AQUILA_INGEST_TOKEN",
+		"AQUILA_API_TOKEN",
 		"AQUILA_SOURCE_DIR",
 		"AQUILA_SOURCE_SNAPSHOT",
 		"AQUILA_WORKER_ADDR",
+		"PORT",
 	}
 	for _, key := range keys {
 		t.Setenv(key, "")
@@ -97,6 +99,22 @@ func TestLoadIngestTokenFromEnv(t *testing.T) {
 	}
 	if cfg.Ingest.Token != "local-demo" {
 		t.Fatalf("token = %q", cfg.Ingest.Token)
+	}
+}
+
+func TestLoadAPITokenAndPortFromEnv(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("AQUILA_API_TOKEN", "control-token")
+	t.Setenv("PORT", "8088")
+	cfg, err := LoadFrom("")
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if cfg.Server.Token != "control-token" {
+		t.Fatalf("token = %q", cfg.Server.Token)
+	}
+	if cfg.Server.Addr != ":8088" {
+		t.Fatalf("addr = %q", cfg.Server.Addr)
 	}
 }
 

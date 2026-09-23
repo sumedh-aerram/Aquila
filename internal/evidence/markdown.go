@@ -17,7 +17,11 @@ func Markdown(a Artifact) string {
 		b.WriteString("recorded: " + a.Recorded.UTC().Format("2006-01-02T15:04:05Z") + "\n")
 	}
 	b.WriteString("overall: " + a.Result.Overall + "\n")
-	b.WriteString("validated: false\n")
+	if a.Validated {
+		b.WriteString("validated: true\n")
+	} else {
+		b.WriteString("validated: false\n")
+	}
 	if a.BaselineSHA != "" {
 		dirty := "clean"
 		if a.Dirty {
@@ -74,7 +78,11 @@ func Markdown(a Artifact) string {
 			b.WriteString("- " + n + "\n")
 		}
 	}
-	b.WriteString("\nnot validated. match is not a pass. this file is evidence, not a policy decision.\n")
+	if a.Validated {
+		b.WriteString("\nvalidated. required experiments ran on a clean recorded revision. match is not a ship decision.\n")
+	} else {
+		b.WriteString("\nnot validated. match is not a pass. this file is evidence, not a policy decision.\n")
+	}
 	return b.String()
 }
 

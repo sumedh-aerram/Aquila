@@ -48,7 +48,56 @@ func TestBuildOmitsBodiesAndIsNeverValidated(t *testing.T) {
 	}
 }
 
-func TestDecodeRejectsValidatedTrue(t *testing.T) {
+func TestBuildEarnsValidated(t *testing.T) {
+	t.Parallel()
+	lat := []replay.StepLatency{{
+		Method:   "GET",
+		Path:     "/healthz",
+		Baseline: replay.Summary{N: 20, HasP95: true},
+		Patch:    replay.Summary{N: 20, HasP95: true},
+	}}
+	a := Build(Input{
+		Now:         time.Date(2026, 9, 23, 20, 0, 0, 0, time.UTC),
+		Baseline:    "http://127.0.0.1:18180",
+		Patch:       "http://127.0.0.1:18280",
+		BaselineSHA: "abc123",
+		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:      impact.Report{Files: []string{"a.go"}, Direct: []impact.Finding{{Name: "F"}}},
+		Plan: plan.DAG{Steps: []plan.Step{
+			{ID: "env", Kind: plan.KindEnv, Required: true},
+			{ID: "behavior", Kind: plan.KindBehavior, Required: true},
+			{ID: "latency", Kind: plan.KindLatency, Required: true, N: 20},
+		}},
+		Result: plan.Evidence{
+			Overall: replay.VerdictMatch,
+			Steps: []plan.StepResult{
+				{ID: "env", Kind: plan.KindEnv, Verdict: plan.VerdictPrepared},
+				{ID: "behavior", Kind: plan.KindBehavior, Verdict: replay.VerdictMatch},
+				{ID: "latency", Kind: plan.KindLatency, Verdict: plan.VerdictSamples, Latency: lat},
+			},
+		},
+	})
+	if !a.Validated {
+		t.Fatal("expected earned")
+	}
+	raw, err := Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Validated {
+		t.Fatal("round trip dropped validated")
+	}
+	md := Markdown(a)
+	if !strings.Contains(md, "validated: true") || strings.Contains(md, "overall: pass") {
+		t.Fatalf("%s", md)
+	}
+}
+
+func TestDecodeRejectsUnearnedValidated(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`{"schema":"aquila.evidence.v1","validated":true,"result":{"overall":"match"}}`)
 	if _, err := Decode(bytes.NewReader(raw)); err == nil {

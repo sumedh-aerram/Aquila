@@ -37,6 +37,9 @@ func (m *Memory) Create(ctx context.Context, opts CreateOpts) (Job, error) {
 	if m.byID == nil {
 		m.byID = make(map[string]Job)
 	}
+	if gatewayBusy(m.jobs(), job) {
+		return Job{}, ErrBusy
+	}
 	m.byID[job.ID] = cloneJob(job)
 	m.order = append(m.order, job.ID)
 	return cloneJob(job), nil
@@ -61,16 +64,21 @@ func (m *Memory) Get(ctx context.Context, id string) (Job, error) {
 }
 
 // List implements Store. Newest first.
-func (m *Memory) List(ctx context.Context, limit int) ([]Job, error) {
+func (m *Memory) List(ctx context.Context, limit int, service string) ([]Job, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	limit = clipLimit(limit)
+	want := clipService(service)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Job, 0, len(m.order))
 	for _, id := range m.order {
-		out = append(out, cloneJob(m.byID[id]))
+		j := m.byID[id]
+		if want != "" && j.Service != want {
+			continue
+		}
+		out = append(out, cloneJob(j))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Created.Equal(out[j].Created) {
@@ -97,16 +105,20 @@ func (m *Memory) RequeueExpired(ctx context.Context, now time.Time) (int, error)
 func (m *Memory) requeueExpiredLocked(now time.Time) int {
 	n := 0
 	for id, job := range m.byID {
+		if failDeadline(&job, now) {
+			m.byID[id] = job
+			n++
+			continue
+		}
 		changed := false
 		for i := range job.Tasks {
-			if requeue(&job.Tasks[i], now) {
+			if requeue(&job.Tasks[i], now, job.Canceled) {
 				n++
 				changed = true
 			}
 		}
 		if changed {
-			settle(job.Tasks)
-			job.Status = jobStatus(job.Tasks)
+			refreshJob(&job)
 			m.byID[id] = job
 		}
 	}
@@ -141,6 +153,9 @@ func (m *Memory) Lease(ctx context.Context, w Worker, now time.Time) (Lease, err
 			continue
 		}
 		job := m.byID[id]
+		if job.Canceled || job.Status == StatusCanceled {
+			continue
+		}
 		for i := range job.Tasks {
 			t := &job.Tasks[i]
 			if t.State != StateReady || t.Operator {
@@ -226,14 +241,32 @@ func (m *Memory) Commit(ctx context.Context, taskID, attemptID string, result pl
 			if err := applyCommit(&job.Tasks[i], aid, result, fail); err != nil {
 				return Task{}, err
 			}
-			settle(job.Tasks)
-			job.Status = jobStatus(job.Tasks)
-			job.Validated = false
+			refreshJob(&job)
 			m.byID[id] = job
 			return job.Tasks[i], nil
 		}
 	}
 	return Task{}, ErrNotFound
+}
+
+// Cancel implements Store.
+func (m *Memory) Cancel(ctx context.Context, id string) (Job, error) {
+	if err := ctx.Err(); err != nil {
+		return Job{}, err
+	}
+	id, ok := normalizeID(id)
+	if !ok {
+		return Job{}, fmt.Errorf("jobs: invalid id")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.byID[id]
+	if !ok {
+		return Job{}, ErrNotFound
+	}
+	applyCancel(&job)
+	m.byID[id] = job
+	return cloneJob(job), nil
 }
 
 func cloneJob(j Job) Job {
@@ -242,3 +275,5 @@ func cloneJob(j Job) Job {
 	cp.Workload = append([]Step(nil), j.Workload...)
 	return cp
 }
+
+var _ Store = (*Memory)(nil)

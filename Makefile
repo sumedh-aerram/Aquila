@@ -24,7 +24,7 @@ GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 SHOP_GW     := http://127.0.0.1:18080
 
-.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke executor executor-test
+.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke terraform-eval executor executor-test
 
 help:
 	@printf '%s\n' \
@@ -58,6 +58,7 @@ help:
 		'  make experiment-smoke  Prepare, start, replay, and tear down a shop pair' \
 		'  make job-eval      Job DAG, worker lease/commit, ask, and patch tests' \
 		'  make job-smoke     Enqueue a fixture job against the live shop and lease it' \
+		'  make terraform-eval  terraform fmt and validate (does not apply)' \
 		'  make executor      Build C++ aquila-exec into ./bin' \
 		'  make executor-test Native supervisor tests (rlimits, timeout; net ns is Linux)' \
 		'  make down      Stop the local Compose stack' \
@@ -180,13 +181,22 @@ experiment-smoke: cli
 job-eval:
 	$(GO) test -race -count=1 ./internal/investigate ./internal/rewrite ./internal/jobs ./internal/worker ./internal/cas ./internal/action ./internal/sandbox ./internal/nexec
 	$(GO) test -race -count=1 ./internal/api -run 'TestCreateJob'
-	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunAsk|TestRunPatch|TestRunJob|TestRunHelp|TestCommandTimeout'
+	$(GO) test -race -count=1 ./internal/cli ./cmd/aquila -run 'TestRunAsk|TestRunWorkflow|TestRunPatch|TestRunJob|TestRunHelp|TestCommandTimeout'
 
 job-smoke: cli
 	'$(AQUILA)' job -fixture -n 1 -base '$(SHOP_GW)' -patch '$(SHOP_GW)' -f internal/pair/testdata/d1.diff
 	'$(AQUILA)' worker -once
 	'$(AQUILA)' worker -once
+	'$(AQUILA)' worker -once
+	'$(AQUILA)' worker -once
+	'$(AQUILA)' worker -once
+	'$(AQUILA)' worker -once
 	'$(AQUILA)' jobs
+
+terraform-eval:
+	terraform fmt -check -recursive deploy/terraform
+	terraform -chdir=deploy/terraform init -backend=false -input=false
+	terraform -chdir=deploy/terraform validate
 
 fmt:
 	$(GO) fmt ./...

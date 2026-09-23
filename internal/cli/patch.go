@@ -8,11 +8,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sumedhaerram/aquila/internal/diff"
 	"github.com/sumedhaerram/aquila/internal/rewrite"
 )
 
 // RunPatch prints a candidate unified diff for a known shop rewrite.
-// It does not write the module tree and does not claim the change is safe.
+// -apply writes the tree. It does not claim the change is safe.
 func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := flag.NewFlagSet("patch", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -20,6 +21,7 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
 	file := fs.String("f", "", "diff file (default stdin)")
+	apply := fs.Bool("apply", false, "write the candidate onto the module tree (not a pass)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}
@@ -35,11 +37,19 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	out, err := rewrite.D1(patchModule(ctx, *dir), rep.Files)
+	mod := patchModule(ctx, *dir)
+	out, err := rewrite.Candidates(mod, rep.Files)
 	if err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}
 	_, _ = stdout.Write(out)
+	if *apply {
+		if err := diff.Apply(mod, out); err != nil {
+			return fmt.Errorf("cli: patch: %w", err)
+		}
+		writef(stdout, "applied. not validated. run aquila experiment.\n")
+		return nil
+	}
 	writef(stdout, "not applied. not validated. candidate only.\n")
 	return nil
 }

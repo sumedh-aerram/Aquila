@@ -36,6 +36,7 @@ type Config struct {
 
 type ServerConfig struct {
 	Addr            string        `yaml:"addr"`
+	Token           string        `yaml:"token"`
 	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
 	ReadTimeout     time.Duration `yaml:"read_timeout"`
 	WriteTimeout    time.Duration `yaml:"write_timeout"`
@@ -154,6 +155,17 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AQUILA_WORKER_ADDR"); v != "" {
 		cfg.Worker.Addr = v
+	}
+	if v := os.Getenv("AQUILA_API_TOKEN"); v != "" {
+		cfg.Server.Token = v
+	}
+	if os.Getenv("AQUILA_SERVER_ADDR") == "" {
+		if v := strings.TrimSpace(os.Getenv("PORT")); v != "" {
+			if !strings.HasPrefix(v, ":") {
+				v = ":" + v
+			}
+			cfg.Server.Addr = v
+		}
 	}
 }
 

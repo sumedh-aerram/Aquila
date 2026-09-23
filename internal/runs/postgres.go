@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
+	"github.com/sumedhaerram/aquila/internal/replay"
 )
 
 // Postgres stores experiment runs in aquila.runs.
@@ -26,7 +27,7 @@ const insertSQL = `
 INSERT INTO aquila.runs (
     id, recorded_at, baseline_sha, dirty, workload_digest, artifact_digest, overall, validated, artifact
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, FALSE, $8
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
 )
 ON CONFLICT (id) DO NOTHING
 RETURNING id
@@ -39,8 +40,10 @@ WHERE id = $1
 `
 
 const listSQL = `
-SELECT id, recorded_at, baseline_sha, dirty, workload_digest, artifact_digest, overall, validated
+SELECT id, recorded_at, baseline_sha, dirty, workload_digest, artifact_digest, overall, validated,
+       COALESCE(artifact->>'service', '')
 FROM aquila.runs
+WHERE ($2 = '' OR COALESCE(artifact->>'service', '') = $2)
 ORDER BY recorded_at DESC, id DESC
 LIMIT $1
 `
@@ -61,7 +64,7 @@ func (p *Postgres) Insert(ctx context.Context, rec Record) (Record, error) {
 	var id string
 	err = p.pool.QueryRow(ctx, insertSQL,
 		prepared.ID, prepared.Recorded, prepared.BaselineSHA, prepared.Dirty,
-		prepared.WorkloadDigest, prepared.ArtifactDigest, prepared.Overall, raw,
+		prepared.WorkloadDigest, prepared.ArtifactDigest, prepared.Overall, prepared.Validated, raw,
 	).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		existing, getErr := p.Get(ctx, prepared.ID)
@@ -100,7 +103,7 @@ func (p *Postgres) Get(ctx context.Context, id string) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("get run: %w", err)
 	}
-	if rec.Validated {
+	if rec.Validated && rec.Overall != replay.VerdictMatch {
 		return Record{}, fmt.Errorf("runs: stored validated claim")
 	}
 	var a evidence.Artifact
@@ -111,17 +114,18 @@ func (p *Postgres) Get(ctx context.Context, id string) (Record, error) {
 		return Record{}, err
 	}
 	rec.Artifact = a
+	rec.Validated = a.Validated
 	rec.Recorded = rec.Recorded.UTC()
 	return rec, nil
 }
 
 // List implements Store. Artifact bodies are omitted.
-func (p *Postgres) List(ctx context.Context, limit int) ([]Record, error) {
+func (p *Postgres) List(ctx context.Context, limit int, service string) ([]Record, error) {
 	if p == nil || p.pool == nil {
 		return nil, fmt.Errorf("postgres runs is not configured")
 	}
 	limit = clipLimit(limit)
-	rows, err := p.pool.Query(ctx, listSQL, limit)
+	rows, err := p.pool.Query(ctx, listSQL, limit, clipService(service))
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
@@ -132,10 +136,11 @@ func (p *Postgres) List(ctx context.Context, limit int) ([]Record, error) {
 		if err := rows.Scan(
 			&rec.ID, &rec.Recorded, &rec.BaselineSHA, &rec.Dirty,
 			&rec.WorkloadDigest, &rec.ArtifactDigest, &rec.Overall, &rec.Validated,
+			&rec.Service,
 		); err != nil {
 			return nil, fmt.Errorf("list runs: %w", err)
 		}
-		if rec.Validated {
+		if rec.Validated && rec.Overall != replay.VerdictMatch {
 			return nil, fmt.Errorf("runs: stored validated claim")
 		}
 		rec.Recorded = rec.Recorded.UTC()

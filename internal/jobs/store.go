@@ -16,6 +16,7 @@ const (
 	StatusRunning  = "running"
 	StatusComplete = "complete"
 	StatusFailed   = "failed"
+	StatusCanceled = "canceled"
 
 	StatePending   = "pending"
 	StateReady     = "ready"
@@ -24,14 +25,16 @@ const (
 	StateFailed    = "failed"
 	StateSkipped   = "skipped"
 
-	idLen        = 16
-	leaseTTL     = 15 * time.Second
-	DefaultSlots = 1
-	MaxSlots     = 8
-	maxSteps     = 20
-	maxBody      = 8 << 10
-	DefaultList  = 20
-	MaxList      = 50
+	idLen           = 16
+	leaseTTL        = 15 * time.Second
+	DefaultSlots    = 1
+	MaxSlots        = 8
+	maxSteps        = 20
+	maxBody         = 8 << 10
+	DefaultList     = 20
+	MaxList         = 50
+	maxServiceName  = 128
+	DefaultDeadline = 10 * time.Minute
 )
 
 var (
@@ -47,6 +50,8 @@ var (
 	ErrCapacity = errors.New("jobs: worker at capacity")
 	// ErrInvalidID is returned when a job id is not lowercase hex.
 	ErrInvalidID = errors.New("jobs: invalid job id")
+	// ErrBusy is returned when another unfinished job occupies a gateway host.
+	ErrBusy = errors.New("jobs: gateway occupied")
 )
 
 // Step is one operator-supplied request stored for a worker. Bodies are not
@@ -77,15 +82,18 @@ type Task struct {
 	Err        string          `json:"error,omitempty"`
 }
 
-// Job is one experiment DAG. Validated is always false.
+// Job is one experiment DAG. Validated is earned after required tasks succeed.
 type Job struct {
 	ID          string    `json:"id"`
 	Created     time.Time `json:"created_at"`
 	Status      string    `json:"status"`
+	Service     string    `json:"service,omitempty"`
 	Baseline    string    `json:"baseline"`
 	Patch       string    `json:"patch"`
 	BaselineSHA string    `json:"baseline_sha,omitempty"`
 	Dirty       bool      `json:"dirty,omitempty"`
+	Deadline    time.Time `json:"deadline,omitempty"`
+	Canceled    bool      `json:"canceled,omitempty"`
 	Workload    []Step    `json:"workload"`
 	Plan        plan.DAG  `json:"plan"`
 	Tasks       []Task    `json:"tasks"`
@@ -96,8 +104,10 @@ type Job struct {
 type CreateOpts struct {
 	Baseline    string          `json:"baseline"`
 	Patch       string          `json:"patch"`
+	Service     string          `json:"service,omitempty"`
 	BaselineSHA string          `json:"baseline_sha,omitempty"`
 	Dirty       bool            `json:"dirty,omitempty"`
+	Deadline    time.Time       `json:"deadline,omitempty"`
 	Workload    replay.Workload `json:"workload"`
 	Plan        plan.DAG        `json:"plan"`
 }
@@ -139,11 +149,12 @@ func (w Worker) slots() int {
 type Store interface {
 	Create(ctx context.Context, opts CreateOpts) (Job, error)
 	Get(ctx context.Context, id string) (Job, error)
-	List(ctx context.Context, limit int) ([]Job, error)
+	List(ctx context.Context, limit int, service string) ([]Job, error)
 	Lease(ctx context.Context, w Worker, now time.Time) (Lease, error)
 	Heartbeat(ctx context.Context, taskID, attemptID, workerID string, now time.Time) error
 	Commit(ctx context.Context, taskID, attemptID string, result plan.StepResult, fail string) (Task, error)
 	RequeueExpired(ctx context.Context, now time.Time) (int, error)
+	Cancel(ctx context.Context, id string) (Job, error)
 }
 
 func clipLimit(n int) int {
@@ -154,6 +165,14 @@ func clipLimit(n int) int {
 		return MaxList
 	}
 	return n
+}
+
+func clipService(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxServiceName {
+		s = s[:maxServiceName]
+	}
+	return s
 }
 
 // ParseID returns a lowercase hex job id or ErrInvalidID.
@@ -197,6 +216,9 @@ func validateCreate(opts CreateOpts) error {
 	}
 	if len(opts.Workload.Steps) == 0 {
 		return fmt.Errorf("jobs: empty workload")
+	}
+	if !opts.Deadline.IsZero() && !opts.Deadline.After(time.Now().Add(-time.Second)) {
+		return fmt.Errorf("jobs: deadline has passed")
 	}
 	if len(opts.Workload.Steps) > maxSteps {
 		return fmt.Errorf("jobs: too many workload steps")

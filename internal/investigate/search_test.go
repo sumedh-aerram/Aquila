@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
+	"github.com/sumedhaerram/aquila/internal/locate"
 )
 
 func TestSearchMatchesRoute(t *testing.T) {
@@ -30,9 +32,21 @@ func TestSearchMatchesObservedHop(t *testing.T) {
 		Question: "why is checkout slow",
 		Origin:   "cwd",
 		Services: []string{"gateway", "checkout", "payment"},
-		Hops:     []string{"gateway -> checkout", "checkout -> payment"},
-		Paths:    []string{"gateway -> checkout -> payment -> processor"},
-		Binds:    []string{"payment chargeProcessor internal/payment/handler.go:142"},
+		Hops: []Hop{
+			{From: "gateway", To: "checkout", Provenance: graph.ProvenanceObservedParent},
+			{From: "checkout", To: "payment", Provenance: graph.ProvenanceObservedParent},
+		},
+		Paths: []Path{{
+			Services:   []string{"gateway", "checkout", "payment", "processor"},
+			Provenance: graph.ProvenanceObservedParent,
+		}},
+		Binds: []Bind{{
+			Service:    "payment",
+			Name:       "chargeProcessor",
+			File:       "internal/payment/handler.go",
+			Line:       142,
+			Provenance: locate.ProvenanceCodeAttrs,
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +54,12 @@ func TestSearchMatchesObservedHop(t *testing.T) {
 	joined := strings.Join(rep.Hits, "\n")
 	if !strings.Contains(joined, "checkout") || !strings.Contains(joined, "payment") {
 		t.Fatalf("%v", rep.Hits)
+	}
+	if !strings.Contains(joined, graph.ProvenanceObservedParent) {
+		t.Fatalf("missing hop provenance: %v", rep.Hits)
+	}
+	if !strings.Contains(joined, locate.ProvenanceCodeAttrs) || !strings.Contains(joined, "chargeProcessor") {
+		t.Fatalf("must join neighborhood binds: %v", rep.Hits)
 	}
 	if !strings.Contains(strings.Join(rep.Notes, "\n"), "not a patch") {
 		t.Fatalf("%v", rep.Notes)
@@ -53,7 +73,7 @@ func TestSearchEmptyHitsWhenNoTokenMatches(t *testing.T) {
 	t.Parallel()
 	rep, err := Search(Input{
 		Question: "redis lock contention",
-		Hops:     []string{"gateway -> checkout"},
+		Hops:     []Hop{{From: "gateway", To: "checkout", Provenance: graph.ProvenanceObservedParent}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +90,7 @@ func TestSearchIncludesImpactWhenPresent(t *testing.T) {
 	t.Parallel()
 	imp := impact.Report{
 		Files:  []string{"internal/payment/handler.go"},
-		Direct: []impact.Finding{{Name: "chargeProcessor", File: "internal/payment/handler.go"}},
+		Direct: []impact.Finding{{Name: "chargeProcessor", File: "internal/payment/handler.go", Reason: "changed_lines"}},
 	}
 	rep, err := Search(Input{
 		Question: "chargeProcessor authorize",
@@ -81,6 +101,9 @@ func TestSearchIncludesImpactWhenPresent(t *testing.T) {
 	}
 	joined := strings.Join(rep.Hits, "\n")
 	if !strings.Contains(joined, "chargeProcessor") {
+		t.Fatalf("%v", rep.Hits)
+	}
+	if !strings.Contains(joined, "changed_lines") {
 		t.Fatalf("%v", rep.Hits)
 	}
 }

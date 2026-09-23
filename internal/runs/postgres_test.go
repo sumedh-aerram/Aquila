@@ -57,7 +57,7 @@ func TestPostgresInsertIsIdempotent(t *testing.T) {
 	if got.Overall != replay.VerdictDiffer || got.Artifact.Result.Overall != replay.VerdictDiffer {
 		t.Fatalf("%+v", got)
 	}
-	listed, err := p.List(t.Context(), 50)
+	listed, err := p.List(t.Context(), 50, "")
 	if err != nil {
 		t.Fatal(err)
 	}

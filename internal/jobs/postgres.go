@@ -26,15 +26,20 @@ func NewPostgres(pool *pgxpool.Pool) *Postgres {
 
 const insertJobSQL = `
 INSERT INTO aquila.jobs (id, created_at, status, baseline, patch, baseline_sha, dirty, validated, payload)
-VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 const getJobSQL = `
 SELECT payload FROM aquila.jobs WHERE id = $1
 `
 
+const lockJobSQL = `
+SELECT id, payload FROM aquila.jobs WHERE id = $1 FOR UPDATE
+`
+
 const listJobSQL = `
 SELECT payload FROM aquila.jobs
+WHERE ($2 = '' OR COALESCE(payload->>'service', '') = $2)
 ORDER BY created_at DESC, id DESC
 LIMIT $1
 `
@@ -47,8 +52,10 @@ FOR UPDATE
 `
 
 const updateJobSQL = `
-UPDATE aquila.jobs SET status = $2, payload = $3, validated = FALSE WHERE id = $1
+UPDATE aquila.jobs SET status = $2, payload = $3, validated = $4 WHERE id = $1
 `
+
+const occupancyLockSQL = `SELECT pg_advisory_xact_lock(872145)`
 
 // Create implements Store.
 func (p *Postgres) Create(ctx context.Context, opts CreateOpts) (Job, error) {
@@ -59,13 +66,35 @@ func (p *Postgres) Create(ctx context.Context, opts CreateOpts) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, occupancyLockSQL); err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
+	}
+	found, err := lockJobs(ctx, tx)
+	if err != nil {
+		return Job{}, err
+	}
+	existing := make([]Job, 0, len(found))
+	for _, r := range found {
+		existing = append(existing, r.job)
+	}
+	if gatewayBusy(existing, job) {
+		return Job{}, ErrBusy
+	}
 	raw, err := json.Marshal(job)
 	if err != nil {
 		return Job{}, fmt.Errorf("jobs: %w", err)
 	}
-	_, err = p.pool.Exec(ctx, insertJobSQL, job.ID, job.Created, job.Status, job.Baseline, job.Patch, job.BaselineSHA, job.Dirty, raw)
+	_, err = tx.Exec(ctx, insertJobSQL, job.ID, job.Created, job.Status, job.Baseline, job.Patch, job.BaselineSHA, job.Dirty, job.Validated, raw)
 	if err != nil {
 		return Job{}, fmt.Errorf("insert job: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
 	}
 	return job, nil
 }
@@ -88,9 +117,9 @@ func (p *Postgres) Get(ctx context.Context, id string) (Job, error) {
 }
 
 // List implements Store.
-func (p *Postgres) List(ctx context.Context, limit int) ([]Job, error) {
+func (p *Postgres) List(ctx context.Context, limit int, service string) ([]Job, error) {
 	limit = clipLimit(limit)
-	rows, err := p.pool.Query(ctx, listJobSQL, limit)
+	rows, err := p.pool.Query(ctx, listJobSQL, limit, clipService(service))
 	if err != nil {
 		return nil, fmt.Errorf("list jobs: %w", err)
 	}
@@ -168,6 +197,9 @@ func (p *Postgres) Lease(ctx context.Context, w Worker, now time.Time) (Lease, e
 			continue
 		}
 		job := r.job
+		if job.Canceled || job.Status == StatusCanceled {
+			continue
+		}
 		for i := range job.Tasks {
 			t := &job.Tasks[i]
 			if t.State != StateReady || t.Operator {
@@ -178,12 +210,12 @@ func (p *Postgres) Lease(ctx context.Context, w Worker, now time.Time) (Lease, e
 			t.Fence++
 			t.WorkerID = workerID
 			t.LeaseUntil = now.Add(leaseTTL)
-			job.Status = jobStatus(job.Tasks)
+			refreshJob(&job)
 			raw, err := json.Marshal(job)
 			if err != nil {
 				return Lease{}, fmt.Errorf("jobs: %w", err)
 			}
-			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw); err != nil {
+			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw, job.Validated); err != nil {
 				return Lease{}, fmt.Errorf("jobs: %w", err)
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -257,7 +289,7 @@ func (p *Postgres) Heartbeat(ctx context.Context, taskID, attemptID, workerID st
 			if err != nil {
 				return fmt.Errorf("jobs: %w", err)
 			}
-			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw); err != nil {
+			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw, job.Validated); err != nil {
 				return fmt.Errorf("jobs: %w", err)
 			}
 			return tx.Commit(ctx)
@@ -312,14 +344,12 @@ func (p *Postgres) Commit(ctx context.Context, taskID, attemptID string, result 
 			if err := applyCommit(&job.Tasks[i], aid, result, fail); err != nil {
 				return Task{}, err
 			}
-			settle(job.Tasks)
-			job.Status = jobStatus(job.Tasks)
-			job.Validated = false
+			refreshJob(&job)
 			raw, err := json.Marshal(job)
 			if err != nil {
 				return Task{}, fmt.Errorf("jobs: %w", err)
 			}
-			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw); err != nil {
+			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw, job.Validated); err != nil {
 				return Task{}, fmt.Errorf("jobs: %w", err)
 			}
 			if err := tx.Commit(ctx); err != nil {
@@ -351,15 +381,19 @@ func expireTx(ctx context.Context, tx pgx.Tx, now time.Time) (int, error) {
 			return 0, err
 		}
 		changed := false
+		if failDeadline(&job, now) {
+			n++
+			jobs = append(jobs, job)
+			continue
+		}
 		for i := range job.Tasks {
-			if requeue(&job.Tasks[i], now) {
+			if requeue(&job.Tasks[i], now, job.Canceled) {
 				n++
 				changed = true
 			}
 		}
 		if changed {
-			settle(job.Tasks)
-			job.Status = jobStatus(job.Tasks)
+			refreshJob(&job)
 			jobs = append(jobs, job)
 		}
 	}
@@ -372,7 +406,7 @@ func expireTx(ctx context.Context, tx pgx.Tx, now time.Time) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("jobs: %w", err)
 		}
-		if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw); err != nil {
+		if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw, job.Validated); err != nil {
 			return 0, fmt.Errorf("jobs: %w", err)
 		}
 	}
@@ -384,8 +418,46 @@ func decodeJob(raw []byte) (Job, error) {
 	if err := json.Unmarshal(raw, &job); err != nil {
 		return Job{}, fmt.Errorf("jobs: %w", err)
 	}
-	if job.Validated {
-		return Job{}, fmt.Errorf("jobs: validated must be false")
+	job.Validated = jobEarned(job)
+	return job, nil
+}
+
+// Cancel implements Store.
+func (p *Postgres) Cancel(ctx context.Context, id string) (Job, error) {
+	id, ok := normalizeID(id)
+	if !ok {
+		return Job{}, fmt.Errorf("jobs: invalid id")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var raw []byte
+	var rowID string
+	err = tx.QueryRow(ctx, lockJobSQL, id).Scan(&rowID, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, ErrNotFound
+	}
+	if err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
+	}
+	job, err := decodeJob(raw)
+	if err != nil {
+		return Job{}, err
+	}
+	applyCancel(&job)
+	out, err := json.Marshal(job)
+	if err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
+	}
+	if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, out, job.Validated); err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, fmt.Errorf("jobs: %w", err)
 	}
 	return job, nil
 }
+
+var _ Store = (*Postgres)(nil)

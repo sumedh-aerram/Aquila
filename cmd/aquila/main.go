@@ -60,12 +60,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cli.RunRuns(ctx, args[1:], stdout)
 	case "ask":
 		return cli.RunAsk(ctx, args[1:], os.Stdin, stdout, stderr)
+	case "run":
+		return cli.RunWorkflow(ctx, args[1:], os.Stdin, stdout)
 	case "patch":
 		return cli.RunPatch(ctx, args[1:], os.Stdin, stdout)
 	case "job":
 		return cli.RunJob(ctx, args[1:], os.Stdin, stdout)
 	case "jobs":
 		return cli.RunJobs(ctx, args[1:], stdout)
+	case "attaches":
+		return cli.RunAttaches(ctx, args[1:], stdout)
 	case "worker":
 		return cli.RunWorker(ctx, args[1:], stdout)
 	default:
@@ -95,9 +99,11 @@ Commands:
   report      Markdown from a saved evidence JSON file (does not re-run)
   runs        List, show, or import persisted experiment evidence
   ask         Observed facts matching a question (not a patch, not validated)
-  patch       Candidate D1 rewrite from impact (does not apply)
+  run         Investigate, plan, candidate, and experiment (no LLM)
+  patch       Candidate shop rewrite from impact (optional -apply; not a pass)
   job         Enqueue a plan as a durable DAG for a worker (does not start compose)
-  jobs        List or show persisted jobs
+  jobs        List, show, or cancel persisted jobs
+  attaches    OTEL service.name values in the span store (not tenants)
   worker      Single gRPC worker: lease one executable task and commit
   version     Print the Aquila version
   help        Show this help
@@ -110,13 +116,16 @@ Flags:
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
   -pair path      experiment: pair parent when omitting -base/-patch (default out/env)
   -dir path       observe/impact/plan/experiment/replay: module (and git tree) under change (default .)
-  -service name   observe/impact/ask/replay/experiment/job: OTEL service.name (scopes the window)
+  -service name   observe/impact/ask/replay/experiment/job/jobs/runs: OTEL service.name
   -job id         worker: lease only READY tasks for this job
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
   -workload path  replay/experiment: operator JSON steps (bodies never from traces)
-  -n int          replay: repeats (default 1). experiment: latency repeats (0 = plan default 20)
+  -smoke          experiment/job: latency n=1; cannot validate
+  -apply          patch/run: write the candidate onto the module tree (not a pass)
+  -plan-only      run: investigate, plan, and candidate only
+  -n int          replay: repeats (default 1). experiment/run: latency repeats (0 = plan default 20)
   -target url     fault: upstream gateway
   -listen addr    fault: loopback listen (default 127.0.0.1:19080)
   -delay dur      fault: injected delay before proxy or status
@@ -137,21 +146,27 @@ service refuses span-derived replay unless -service is set. -workload is an oper
 file for POST and friends. -fixture is shop smoke including POST /checkout.
 match is not a pass. p95 is withheld unless n>=20. No regression threshold.
 fault listens on loopback only; an injected 502 is a probe, not a pass. plan
-names env, behavior, latency, and (when runtime paths exist) an operator fault.
-experiment executes behavior and latency; skipped operator steps are not
-a pass. omitting -base and -patch prepares the shop pair only when -dir is
-the shop or this control-plane repo. a foreign or python checkout must pass
-both gateway URLs; it will not start shop compose. -fixture is shop smoke
-and is rejected off the shop. experiment -out
-writes evidence JSON (never validated). experiment
-also POSTs that artifact to /v1/runs when the API is up; a missing store is
-unrecorded, not a pass. report renders a file as Markdown without hitting
-gateways. runs lists stored evidence, shows one id, or imports -f. ask cites
-observed hops, routes, binds, and optional impact tokens only. patch emits a D1
-candidate for examples/shop and does not write the tree. job records env as
-skipped operator and leaves behavior/latency READY for a worker. worker
-leases one READY task over gRPC, runs replay, and commits with an attempt id.
-worker -job pins the lease to that DAG. a stale attempt cannot commit. There is no LLM and no validated patch.
+names env, behavior, latency, and (when runtime paths exist) concurrency plus
+a one-sided 502 probe. experiment executes those steps and go test of impact
+packages when -dir is a Go module. omitting -base and -patch prepares the shop
+pair only when -dir is the shop or this control-plane repo. a foreign or python
+checkout must pass both gateway URLs; it will not start shop compose. -fixture
+is shop smoke and is rejected off the shop. -smoke sets latency n=1 and cannot
+validate. experiment -out writes evidence JSON. validated is earned only when
+required executable steps succeed on a clean recorded revision (env, behavior,
+latency n>=20, concurrency when planned, tests when planned). match is not a
+pass. experiment also POSTs that artifact to /v1/runs when the API is up; a
+missing store is unrecorded, not a pass. report renders a file as Markdown
+without hitting gateways. runs lists stored evidence, shows one id, or imports
+-f. attaches lists service.name values in the store. ask joins question tokens
+onto hops, binds, and impact and labels provenance. run is ask plus plan,
+candidate, and experiment. patch emits the first matching shop rewrite (D1-D6)
+and does not write the tree unless -apply. job records env READY first;
+overlapping jobs on the same gateway host are refused. jobs cancel <id> stops
+remaining READY tasks. a 10m deadline fails unfinished tasks. worker leases one
+READY task over gRPC, runs it, and commits with an attempt id. worker -job pins
+the lease to that DAG. a stale attempt cannot commit. AQUILA_API_TOKEN, when
+set, is sent as Authorization: Bearer. There is no LLM.
 `
 }
 
@@ -180,6 +195,19 @@ func commandTimeout(args []string) time.Duration {
 	case "experiment":
 		n := flagN(args[1:], 20)
 		d := capReplayTimeout(n)
+		if !hasFlag(args[1:], "-base") && !hasFlag(args[1:], "-patch") {
+			d += localEnvBudget
+			if d > maxLocalTimeout {
+				return maxLocalTimeout
+			}
+		}
+		return d
+	case "run":
+		n := flagN(args[1:], 20)
+		d := capReplayTimeout(n)
+		if hasFlag(args[1:], "-plan-only") {
+			return defaultCommandTimeout
+		}
 		if !hasFlag(args[1:], "-base") && !hasFlag(args[1:], "-patch") {
 			d += localEnvBudget
 			if d > maxLocalTimeout {
