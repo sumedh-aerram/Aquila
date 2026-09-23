@@ -126,19 +126,21 @@ the control plane is up (`make dev` from this repository), the loop is:
 export AQUILA_API_URL=http://127.0.0.1:8080   # default
 cd /path/to/your/app
 # process exports OTLP to 127.0.0.1:4317 (not otel-collector:4317 — that is Docker DNS)
-aquila observe
+aquila observe -service ledger
 # edit files in the IDE
-aquila impact          # git diff HEAD in this directory; no pipe required
-aquila plan
-aquila experiment -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out /tmp/evidence.json
+aquila impact -service ledger
+aquila plan -service ledger
+aquila experiment -service ledger -base http://127.0.0.1:BASE -patch http://127.0.0.1:PATCH -out /tmp/evidence.json
 aquila report /tmp/evidence.json
+aquila job -service ledger -base … -patch …
+aquila worker -once -job <id>
 ```
 
 `observe` prints `origin=cwd` for a Go module, `origin=none` when there is no `go.mod` (Python and friends), and `origin=api` only when you are standing in the Aquila control-plane repo so shop diffs still map. It will not pretend a foreign app is `examples/shop`. `impact` without a piped diff reads **your** uncommitted changes. Typed callers (`direct` / `likely`) need a Go module. Otherwise findings are file-level: changed paths, unobserved until spans set `code.file.path`. Runtime joins only on that attribute — not on filename or route guesses. `ask` matches hops, **routes**, binds, and local impact tokens.
 
 Do not bind the app under test to `:8080` (that is Aquila). ReRoute’s README uses 8080; pick another port. Omitting `-base`/`-patch` starts shop Compose **only** when `-dir` is `examples/shop` or this repository; a foreign checkout errors and asks for two gateway URLs. `-fixture` is shop checkout smoke and is rejected off the shop. POST needs `-workload` you wrote.
 
-The shop is the reference system and the only Compose env Aquila can prepare. Health-probe traces (`/healthz` and friends) are omitted from the window. The span store is still shared: hops from shop and from your app can appear together.
+The shop is the reference system and the only Compose env Aquila can prepare. Health-probe traces (`/healthz` and friends) are omitted from the window. The span store is shared on disk; `GET /v1/spans?traces=N&service=` and `-service` keep only traces that include that OTEL `service.name`. A mixed window without `-service` is labeled on observe and refused for span-derived replay. `worker -job` leases only that DAG.
 
 Match is not a pass. Stored runs have `validated=false`. `env` and `patch` remain shop-only.
 

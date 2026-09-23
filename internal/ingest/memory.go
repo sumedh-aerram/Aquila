@@ -2,9 +2,7 @@ package ingest
 
 import (
 	"context"
-	"sort"
 	"sync"
-	"time"
 )
 
 // Memory is an in-process Store for tests.
@@ -63,56 +61,14 @@ func (m *Memory) ListSpans(_ context.Context, q ListQuery) ([]Span, error) {
 }
 
 // ListTraceWindow implements Store.
-func (m *Memory) ListTraceWindow(_ context.Context, maxTraces int) ([]Span, error) {
+func (m *Memory) ListTraceWindow(_ context.Context, maxTraces int, service string) ([]Span, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	type traceInfo struct {
-		id   string
-		last time.Time
-	}
-	byTrace := make(map[string][]Span)
-	latest := make(map[string]time.Time)
+	all := make([]Span, 0, len(m.order))
 	for _, k := range m.order {
-		s := m.spans[k]
-		byTrace[s.TraceID] = append(byTrace[s.TraceID], s)
-		if t, ok := latest[s.TraceID]; !ok || s.StartTime.After(t) {
-			latest[s.TraceID] = s.StartTime
-		}
+		all = append(all, m.spans[k])
 	}
-	infos := make([]traceInfo, 0, len(byTrace))
-	for id, t := range latest {
-		infos = append(infos, traceInfo{id: id, last: t})
-	}
-	sort.Slice(infos, func(i, j int) bool {
-		if infos[i].last.Equal(infos[j].last) {
-			return infos[i].id > infos[j].id
-		}
-		return infos[i].last.After(infos[j].last)
-	})
-	n := normalizeTraceWindow(maxTraces)
-	out := make([]Span, 0)
-	kept := 0
-	for _, info := range infos {
-		spans := byTrace[info.id]
-		if probeOnly(spans) {
-			continue
-		}
-		sort.Slice(spans, func(i, j int) bool {
-			if spans[i].StartTime.Equal(spans[j].StartTime) {
-				return spans[i].SpanID < spans[j].SpanID
-			}
-			return spans[i].StartTime.Before(spans[j].StartTime)
-		})
-		out = append(out, spans...)
-		kept++
-		if kept >= n || len(out) >= maxWindowSpans {
-			if len(out) > maxWindowSpans {
-				return out[:maxWindowSpans], nil
-			}
-			return out, nil
-		}
-	}
-	return out, nil
+	return SelectWindow(all, maxTraces, service), nil
 }
 
 var _ Store = (*Memory)(nil)

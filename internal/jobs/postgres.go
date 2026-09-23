@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -132,6 +133,14 @@ func (p *Postgres) Lease(ctx context.Context, w Worker, now time.Time) (Lease, e
 	if err != nil {
 		return Lease{}, err
 	}
+	wantJob := ""
+	if strings.TrimSpace(w.JobID) != "" {
+		id, ok := normalizeID(w.JobID)
+		if !ok {
+			return Lease{}, ErrInvalidID
+		}
+		wantJob = id
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return Lease{}, fmt.Errorf("jobs: %w", err)
@@ -155,6 +164,9 @@ func (p *Postgres) Lease(ctx context.Context, w Worker, now time.Time) (Lease, e
 		return Lease{}, ErrCapacity
 	}
 	for _, r := range found {
+		if wantJob != "" && r.job.ID != wantJob {
+			continue
+		}
 		job := r.job
 		for i := range job.Tasks {
 			t := &job.Tasks[i]

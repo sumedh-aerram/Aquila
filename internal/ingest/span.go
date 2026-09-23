@@ -14,6 +14,7 @@ const (
 	defaultTraceWindow = 50
 	maxTraceWindow     = 200
 	maxWindowSpans     = 10000
+	maxServiceName     = 128
 )
 
 // Span is the metadata Aquila retains from an OTLP span.
@@ -45,7 +46,7 @@ type ListQuery struct {
 type Store interface {
 	UpsertSpans(ctx context.Context, spans []Span) error
 	ListSpans(ctx context.Context, q ListQuery) ([]Span, error)
-	ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, error)
+	ListTraceWindow(ctx context.Context, maxTraces int, service string) ([]Span, error)
 }
 
 func normalizeLimit(n int) int {

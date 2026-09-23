@@ -76,14 +76,59 @@ func sortTraceSpans(spans []Span) {
 	})
 }
 
+func traceTouches(spans []Span, service string) bool {
+	if service == "" {
+		return true
+	}
+	for _, s := range spans {
+		if s.ServiceName == service {
+			return true
+		}
+	}
+	return false
+}
+
+// ClipService trims and bounds an OTEL service.name query.
+func ClipService(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxServiceName {
+		return s[:maxServiceName]
+	}
+	return s
+}
+
+// UniqueServices returns sorted service names in spans.
+func UniqueServices(spans []Span) []string {
+	seen := map[string]struct{}{}
+	for _, s := range spans {
+		n := strings.TrimSpace(s.ServiceName)
+		if n == "" {
+			continue
+		}
+		seen[n] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // SelectWindow returns spans from the newest non-probe traces, newest first by trace.
-func SelectWindow(spans []Span, maxTraces int) []Span {
+// service, when set, keeps only traces that include that OTEL service.name so a
+// noisier app cannot drown the attach.
+func SelectWindow(spans []Span, maxTraces int, service string) []Span {
+	service = ClipService(service)
 	n := normalizeTraceWindow(maxTraces)
 	infos := groupTraces(spans)
 	out := make([]Span, 0)
 	kept := 0
 	for _, info := range infos {
 		if probeOnly(info.spans) {
+			continue
+		}
+		if !traceTouches(info.spans, service) {
 			continue
 		}
 		sortTraceSpans(info.spans)

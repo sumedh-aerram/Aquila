@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -167,6 +168,36 @@ func TestControllerRestartKeepsJob(t *testing.T) {
 	}
 	if got.ID != job.ID || got.Validated {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestLeaseJobIDSkipsOtherJobs(t *testing.T) {
+	t.Parallel()
+	st := NewMemory()
+	first, err := st.Create(t.Context(), sampleOpts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := st.Create(t.Context(), sampleOpts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	got, err := st.Lease(t.Context(), Worker{ID: "w", JobID: second.ID}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.ID != second.ID {
+		t.Fatalf("leased %s want %s (first=%s)", got.Job.ID, second.ID, first.ID)
+	}
+}
+
+func TestLeaseInvalidJobID(t *testing.T) {
+	t.Parallel()
+	st := NewMemory()
+	_, err := st.Lease(t.Context(), Worker{ID: "w", JobID: "not-hex"}, time.Now())
+	if !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("%v", err)
 	}
 }
 

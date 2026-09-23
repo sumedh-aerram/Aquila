@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strconv"
 
 	"github.com/sumedhaerram/aquila/internal/impact"
 )
@@ -18,6 +17,7 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	file := fs.String("f", "", "diff file (default stdin)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	service := fs.String("service", "", "OTEL service.name; scopes the trace window")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: impact: %w", err)
 	}
@@ -31,7 +31,7 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 		return fmt.Errorf("cli: impact: %w", err)
 	}
 
-	rep, origin, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, origin, err := analyzeDiff(ctx, *api, *dir, *traces, *service, raw)
 	if err != nil {
 		return err
 	}
@@ -39,14 +39,13 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 	return nil
 }
 
-func fetchImpact(ctx context.Context, api string, traces int, raw []byte) (impact.Report, error) {
+func fetchImpact(ctx context.Context, api string, traces int, service string, raw []byte) (impact.Report, error) {
 	c, err := newClient(api)
 	if err != nil {
 		return impact.Report{}, err
 	}
-	n := clipTraces(traces)
 	var rep impact.Report
-	if err := c.postJSON(ctx, "/v1/impact?traces="+strconv.Itoa(n), "text/plain", raw, &rep); err != nil {
+	if err := c.postJSON(ctx, "/v1/impact"+windowQuery(traces, service), "text/plain", raw, &rep); err != nil {
 		return impact.Report{}, err
 	}
 	return rep, nil

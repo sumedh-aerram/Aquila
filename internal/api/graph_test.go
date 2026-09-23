@@ -62,3 +62,29 @@ func TestGraphRejectsInvalidTracesParam(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 }
+
+func TestGraphServiceDoesNotLeakOtherAttach(t *testing.T) {
+	t.Parallel()
+	store := ingest.NewMemory()
+	now := time.Unix(5, 0).UTC()
+	err := store.UpsertSpans(t.Context(), []ingest.Span{
+		{TraceID: "shop", SpanID: "1", ServiceName: "gateway", HTTPRoute: "/users/{id}", HTTPMethod: "GET", StartTime: now.Add(time.Minute)},
+		{TraceID: "app", SpanID: "2", ServiceName: "ledger", HTTPRoute: "/invoice", HTTPMethod: "GET", StartTime: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/graph?traces=20&service=ledger", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var snap graph.Snapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.TraceCount != 1 || len(snap.Services) != 1 || snap.Services[0].Name != "ledger" {
+		t.Fatalf("%+v", snap)
+	}
+}

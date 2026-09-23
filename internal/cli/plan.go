@@ -27,6 +27,7 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	file := fs.String("f", "", "diff file (default stdin)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	service := fs.String("service", "", "OTEL service.name; scopes the trace window")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
@@ -38,7 +39,7 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
-	rep, origin, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, origin, err := analyzeDiff(ctx, *api, *dir, *traces, *service, raw)
 	if err != nil {
 		return err
 	}
@@ -96,6 +97,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
 	outPath := fs.String("out", "", "write evidence JSON (does not imply a pass)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	service := fs.String("service", "", "OTEL service.name; scopes span-derived replay")
 	shop := fs.String("shop", defaultShop(), "shop module when starting a local pair")
 	pairDir := fs.String("pair", filepath.Join("out", "env"), "parent directory for a local pair")
 	basePort := fs.Int("base-port", 0, "baseline gateway host port (default 18180)")
@@ -122,7 +124,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, *service, raw)
 	if err != nil {
 		return err
 	}
@@ -134,7 +136,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		dag = plan.WithLatencyN(dag, *n)
 	}
 
-	w, err := resolveWorkload(ctx, *api, *traces, *fixture, *workload)
+	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload)
 	if err != nil {
 		return err
 	}

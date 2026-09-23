@@ -110,6 +110,8 @@ Flags:
   -out path       env: pair parent (default out/env); experiment: evidence JSON; report: optional markdown
   -pair path      experiment: pair parent when omitting -base/-patch (default out/env)
   -dir path       observe/impact/plan/experiment: module (and git tree) under change (default .)
+  -service name   observe/impact/ask/replay/experiment/job: OTEL service.name (scopes the window)
+  -job id         worker: lease only READY tasks for this job
   -base url       replay/experiment: baseline gateway
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
@@ -126,7 +128,8 @@ Standing in this repo falls back to POST /v1/impact so a shop snapshot still
 maps shop diffs. A directory without go.mod is file-level impact (origin=files),
 not the shop graph. Other Go modules are loaded from -dir. env copies the shop
 and applies the diff only to patch. replay hits -base and -patch using
-GET/HEAD/OPTIONS from server spans (no bodies). -workload is an operator JSON
+GET/HEAD/OPTIONS from server spans (no bodies). A window with more than one
+service refuses span-derived replay unless -service is set. -workload is an operator JSON
 file for POST and friends. -fixture is shop smoke including POST /checkout.
 match is not a pass. p95 is withheld unless n>=20. No regression threshold.
 fault listens on loopback only; an injected 502 is a probe, not a pass. plan
@@ -144,7 +147,7 @@ observed hops, routes, binds, and optional impact tokens only. patch emits a D1
 candidate for examples/shop and does not write the tree. job records env as
 skipped operator and leaves behavior/latency READY for a worker. worker
 leases one READY task over gRPC, runs replay, and commits with an attempt id.
-a stale attempt cannot commit. There is no LLM and no validated patch.
+worker -job pins the lease to that DAG. a stale attempt cannot commit. There is no LLM and no validated patch.
 `
 }
 

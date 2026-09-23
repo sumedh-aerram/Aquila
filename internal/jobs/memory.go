@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,7 +128,18 @@ func (m *Memory) Lease(ctx context.Context, w Worker, now time.Time) (Lease, err
 	if countLeased(m.jobs(), workerID) >= w.slots() {
 		return Lease{}, ErrCapacity
 	}
+	wantJob := ""
+	if strings.TrimSpace(w.JobID) != "" {
+		id, ok := normalizeID(w.JobID)
+		if !ok {
+			return Lease{}, ErrInvalidID
+		}
+		wantJob = id
+	}
 	for _, id := range m.order {
+		if wantJob != "" && id != wantJob {
+			continue
+		}
 		job := m.byID[id]
 		for i := range job.Tasks {
 			t := &job.Tasks[i]

@@ -45,6 +45,8 @@ var (
 	ErrNoReady = errors.New("jobs: no ready task")
 	// ErrCapacity is returned when a worker already holds its slot limit.
 	ErrCapacity = errors.New("jobs: worker at capacity")
+	// ErrInvalidID is returned when a job id is not lowercase hex.
+	ErrInvalidID = errors.New("jobs: invalid job id")
 )
 
 // Step is one operator-supplied request stored for a worker. Bodies are not
@@ -113,6 +115,7 @@ type Lease struct {
 type Worker struct {
 	ID    string
 	Slots int
+	JobID string
 }
 
 func (w Worker) id() (string, error) {
@@ -151,6 +154,15 @@ func clipLimit(n int) int {
 		return MaxList
 	}
 	return n
+}
+
+// ParseID returns a lowercase hex job id or ErrInvalidID.
+func ParseID(raw string) (string, error) {
+	id, ok := normalizeID(raw)
+	if !ok {
+		return "", ErrInvalidID
+	}
+	return id, nil
 }
 
 func normalizeID(raw string) (string, bool) {

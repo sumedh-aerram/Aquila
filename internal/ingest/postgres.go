@@ -114,6 +114,9 @@ const traceWindowSQL = `
 WITH recent AS (
     SELECT trace_id
       FROM aquila.spans
+     WHERE ($3 = '' OR trace_id IN (
+         SELECT trace_id FROM aquila.spans WHERE service_name = $3
+     ))
      GROUP BY trace_id
     HAVING bool_or(
         COALESCE(NULLIF(http_route, ''), span_name) NOT IN (
@@ -134,11 +137,11 @@ SELECT s.trace_id, s.span_id, s.parent_span_id, s.service_name, s.span_name, s.s
 `
 
 // ListTraceWindow implements Store.
-func (p *Postgres) ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, error) {
+func (p *Postgres) ListTraceWindow(ctx context.Context, maxTraces int, service string) ([]Span, error) {
 	if p == nil || p.pool == nil {
 		return nil, fmt.Errorf("postgres ingest is not configured")
 	}
-	rows, err := p.pool.Query(ctx, traceWindowSQL, normalizeTraceWindow(maxTraces), maxWindowSpans)
+	rows, err := p.pool.Query(ctx, traceWindowSQL, normalizeTraceWindow(maxTraces), maxWindowSpans, ClipService(service))
 	if err != nil {
 		return nil, fmt.Errorf("list trace window: %w", err)
 	}
@@ -158,7 +161,7 @@ func (p *Postgres) ListTraceWindow(ctx context.Context, maxTraces int) ([]Span, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return SelectWindow(out, maxTraces), nil
+	return SelectWindow(out, maxTraces, service), nil
 }
 
 var _ Store = (*Postgres)(nil)

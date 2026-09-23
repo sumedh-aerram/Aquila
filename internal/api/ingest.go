@@ -144,12 +144,12 @@ func (s *Server) handleListSpans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if raw := r.URL.Query().Get("traces"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid traces"})
+		n, service, err := parseWindowQuery(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		spans, err := s.spans.ListTraceWindow(r.Context(), n)
+		spans, err := s.spans.ListTraceWindow(r.Context(), n, service)
 		if err != nil {
 			s.log.Error("list trace window", "err", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list failed"})
@@ -193,4 +193,17 @@ func clipQuery(s string, n int) string {
 		n--
 	}
 	return s[:n]
+}
+
+func parseWindowQuery(r *http.Request) (int, string, error) {
+	service := ingest.ClipService(r.URL.Query().Get("service"))
+	raw := r.URL.Query().Get("traces")
+	if raw == "" {
+		return 0, service, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, "", errors.New("invalid traces")
+	}
+	return n, service, nil
 }

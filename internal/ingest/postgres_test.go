@@ -89,7 +89,7 @@ func TestPostgresListTraceWindow(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := p.ListTraceWindow(t.Context(), 50)
+	got, err := p.ListTraceWindow(t.Context(), 50, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,5 +101,29 @@ func TestPostgresListTraceWindow(t *testing.T) {
 	}
 	if found != 2 {
 		t.Fatalf("found=%d window=%d", found, len(got))
+	}
+}
+
+func TestPostgresListTraceWindowServiceDropsOtherAttach(t *testing.T) {
+	p := openTestPostgres(t)
+	h := sha256.Sum256([]byte(t.Name()))
+	shopID := hex.EncodeToString(h[:16])
+	appID := hex.EncodeToString(h[16:32])
+	t.Cleanup(func() {
+		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id IN ($1, $2)`, shopID, appID)
+	})
+	now := time.Unix(40, 0).UTC()
+	if err := p.UpsertSpans(t.Context(), []Span{
+		{TraceID: shopID, SpanID: hex.EncodeToString(h[:8]), ServiceName: "gateway", HTTPRoute: "/users/{id}", HTTPMethod: "GET", StartTime: now.Add(time.Minute)},
+		{TraceID: appID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: "ledger", HTTPRoute: "/invoice", HTTPMethod: "GET", StartTime: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.ListTraceWindow(t.Context(), 1, "ledger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TraceID != appID {
+		t.Fatalf("%+v", got)
 	}
 }

@@ -73,13 +73,13 @@ func Dial(addr string) (*grpc.ClientConn, error) {
 
 // ClientLease leases one task over gRPC.
 func ClientLease(ctx context.Context, conn grpc.ClientConnInterface, workerID string) (*LeaseReply, error) {
-	return ClientLeaseSlots(ctx, conn, workerID, jobs.DefaultSlots)
+	return ClientLeaseSlots(ctx, conn, workerID, jobs.DefaultSlots, "")
 }
 
 // ClientLeaseSlots leases one task with a slot limit.
-func ClientLeaseSlots(ctx context.Context, conn grpc.ClientConnInterface, workerID string, slots int) (*LeaseReply, error) {
+func ClientLeaseSlots(ctx context.Context, conn grpc.ClientConnInterface, workerID string, slots int, jobID string) (*LeaseReply, error) {
 	var out LeaseReply
-	err := conn.Invoke(ctx, "/"+serviceName+"/Lease", &LeaseRequest{WorkerID: workerID, Slots: slots}, &out, contentJSON)
+	err := conn.Invoke(ctx, "/"+serviceName+"/Lease", &LeaseRequest{WorkerID: workerID, Slots: slots, JobID: jobID}, &out, contentJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +106,12 @@ func ClientCommit(ctx context.Context, conn grpc.ClientConnInterface, req *Commi
 
 // RemoteOnce leases, executes, and commits via gRPC.
 func RemoteOnce(ctx context.Context, conn grpc.ClientConnInterface, workerID string) error {
-	return RemoteOnceSlots(ctx, conn, workerID, jobs.DefaultSlots)
+	return RemoteOnceSlots(ctx, conn, workerID, jobs.DefaultSlots, "")
 }
 
 // RemoteOnceSlots leases with a slot limit.
-func RemoteOnceSlots(ctx context.Context, conn grpc.ClientConnInterface, workerID string, slots int) error {
-	reply, err := ClientLeaseSlots(ctx, conn, workerID, slots)
+func RemoteOnceSlots(ctx context.Context, conn grpc.ClientConnInterface, workerID string, slots int, jobID string) error {
+	reply, err := ClientLeaseSlots(ctx, conn, workerID, slots, jobID)
 	if err != nil {
 		return err
 	}

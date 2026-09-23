@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/sumedhaerram/aquila/internal/locate"
 )
@@ -16,16 +15,12 @@ func (s *Server) handleLocate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "source unavailable"})
 		return
 	}
-	maxTraces := 0
-	if raw := r.URL.Query().Get("traces"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid traces"})
-			return
-		}
-		maxTraces = n
+	maxTraces, service, err := parseWindowQuery(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
-	spans, err := s.spans.ListTraceWindow(r.Context(), maxTraces)
+	spans, err := s.spans.ListTraceWindow(r.Context(), maxTraces, service)
 	if err != nil {
 		s.log.Error("list trace window", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "locate failed"})

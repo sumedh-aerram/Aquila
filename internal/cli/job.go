@@ -27,6 +27,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	workload := fs.String("workload", "", "operator workload JSON (not derived from traces)")
 	n := fs.Int("n", 0, "latency repeats (0 uses the plan default)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	service := fs.String("service", "", "OTEL service.name; scopes span-derived replay")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
@@ -41,7 +42,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
-	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, raw)
+	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, *service, raw)
 	if err != nil {
 		return err
 	}
@@ -52,7 +53,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if *n > 0 {
 		dag = plan.WithLatencyN(dag, *n)
 	}
-	w, err := resolveWorkload(ctx, *api, *traces, *fixture, *workload)
+	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload)
 	if err != nil {
 		return err
 	}

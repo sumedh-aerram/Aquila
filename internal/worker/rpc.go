@@ -20,6 +20,7 @@ const serviceName = "aquila.worker.v1.Worker"
 type LeaseRequest struct {
 	WorkerID string `json:"worker_id"`
 	Slots    int    `json:"slots,omitempty"`
+	JobID    string `json:"job_id,omitempty"`
 }
 
 // HeartbeatRequest extends a lease. Attempt must match.
@@ -89,10 +90,13 @@ func (g *GRPC) Lease(ctx context.Context, req *LeaseRequest) (*LeaseReply, error
 	if g.store == nil {
 		return nil, status.Error(codes.Unavailable, "jobs unavailable")
 	}
-	lease, err := g.store.Lease(ctx, jobs.Worker{ID: req.WorkerID, Slots: req.Slots}, nowUTC())
+	lease, err := g.store.Lease(ctx, jobs.Worker{ID: req.WorkerID, Slots: req.Slots, JobID: req.JobID}, nowUTC())
 	if err != nil {
 		if errors.Is(err, jobs.ErrNoReady) || errors.Is(err, jobs.ErrCapacity) {
 			return &LeaseReply{Empty: true}, nil
+		}
+		if errors.Is(err, jobs.ErrInvalidID) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Error(codes.Internal, "lease failed")
 	}

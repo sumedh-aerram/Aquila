@@ -22,11 +22,19 @@ func RunWorker(ctx context.Context, args []string, stdout io.Writer) error {
 	id := fs.String("id", "aquila-worker", "worker id")
 	slots := fs.Int("slots", jobs.DefaultSlots, "max concurrent leased tasks")
 	once := fs.Bool("once", false, "lease at most one task and exit")
+	jobID := fs.String("job", "", "lease only READY tasks for this job id")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: worker: %w", err)
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("cli: worker: unexpected argument %q", fs.Arg(0))
+	}
+	if strings.TrimSpace(*jobID) != "" {
+		id, err := jobs.ParseID(*jobID)
+		if err != nil {
+			return fmt.Errorf("cli: worker: %w", err)
+		}
+		*jobID = id
 	}
 	conn, err := worker.Dial(*addr)
 	if err != nil {
@@ -37,7 +45,7 @@ func RunWorker(ctx context.Context, args []string, stdout io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := worker.RemoteOnceSlots(ctx, conn, *id, *slots)
+		err := worker.RemoteOnceSlots(ctx, conn, *id, *slots, *jobID)
 		if errors.Is(err, jobs.ErrNoReady) || errors.Is(err, jobs.ErrCapacity) {
 			if *once {
 				writef(stdout, "worker   idle\n")

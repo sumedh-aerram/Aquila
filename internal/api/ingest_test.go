@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -315,6 +316,39 @@ func TestListSpansTraceWindow(t *testing.T) {
 		if s.TraceID != "new" {
 			t.Fatalf("%+v", out.Spans)
 		}
+	}
+}
+
+func TestListSpansTraceWindowServiceIsolatesAttach(t *testing.T) {
+	t.Parallel()
+	store := ingest.NewMemory()
+	now := time.Unix(3, 0).UTC()
+	if err := store.UpsertSpans(t.Context(), []ingest.Span{
+		{TraceID: "shop", SpanID: "1", ServiceName: "gateway", HTTPMethod: "GET", HTTPRoute: "/users/{id}", StartTime: now.Add(time.Minute)},
+		{TraceID: "app", SpanID: "2", ServiceName: "ledger", HTTPMethod: "GET", HTTPRoute: "/invoice", StartTime: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Spans: store})
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/spans?traces=1&service=ledger", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Spans []ingest.Span `json:"spans"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Spans) != 1 || out.Spans[0].ServiceName != "ledger" {
+		t.Fatalf("%+v", out.Spans)
+	}
+	rec = httptest.NewRecorder()
+	evil := "/v1/spans?traces=1&service=" + url.QueryEscape("ledger';DROP TABLE aquila.spans;--")
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, evil, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("injection status=%d", rec.Code)
 	}
 }
 

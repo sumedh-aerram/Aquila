@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/gitrev"
@@ -30,6 +29,7 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	service := fs.String("service", "", "OTEL service.name; scopes the trace window")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: observe: %w", err)
 	}
@@ -41,22 +41,26 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	n := clipTraces(*traces)
-	q := "?traces=" + strconv.Itoa(n)
+	q := windowQuery(n, *service)
 
 	var rt graph.Snapshot
 	if err := c.getJSON(ctx, "/v1/graph"+q, &rt); err != nil {
 		return err
 	}
 
-	src, loc, origin, spans, srcErr, locErr := observeJoin(ctx, c, *api, *dir, n, q)
+	src, loc, origin, spans, srcErr, locErr := observeJoin(ctx, c, *api, *dir, n, *service, q)
 	if srcErr != nil && !unavailable(srcErr) {
 		return srcErr
 	}
 	if locErr != nil && !unavailable(locErr) {
 		return locErr
 	}
+	if ingest.ClipService(*service) != "" {
+		rt = graph.Build(spans)
+	}
 
 	writef(stdout, "api  %s  traces=%d\n\n", c.base, n)
+	writeAttach(stdout, *service, spans)
 	writeWorktree(stdout, ctx, *dir)
 	writeRuntime(stdout, rt)
 	writeRoutes(stdout, spans)
@@ -80,11 +84,11 @@ func RunObserve(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	return nil
 }
 
-func observeJoin(ctx context.Context, c *Client, api, dir string, traces int, q string) (src source.Snapshot, loc locate.Snapshot, origin string, spans []ingest.Span, srcErr, locErr error) {
+func observeJoin(ctx context.Context, c *Client, api, dir string, traces int, service, q string) (src source.Snapshot, loc locate.Snapshot, origin string, spans []ingest.Span, srcErr, locErr error) {
 	if g := loadTargetSource(ctx, dir); g != nil {
 		origin = originCwd
 		src = g.Snapshot()
-		spans, locErr = fetchSpans(ctx, api, traces)
+		spans, locErr = fetchSpans(ctx, api, traces, service)
 		if locErr != nil {
 			return src, loc, origin, spans, srcErr, locErr
 		}
@@ -101,11 +105,11 @@ func observeJoin(ctx context.Context, c *Client, api, dir string, traces int, q 
 		if locErr != nil && !unavailable(locErr) {
 			return src, loc, origin, spans, srcErr, locErr
 		}
-		spans, _ = fetchSpans(ctx, api, traces)
+		spans, _ = fetchSpans(ctx, api, traces, service)
 		return src, loc, origin, spans, srcErr, locErr
 	}
 	origin = originNone
-	spans, locErr = fetchSpans(ctx, api, traces)
+	spans, locErr = fetchSpans(ctx, api, traces, service)
 	if locErr != nil {
 		return src, loc, origin, spans, srcErr, locErr
 	}
@@ -200,6 +204,20 @@ func writeLocate(w io.Writer, loc locate.Snapshot) {
 	writef(w, "\n")
 	for _, k := range keys {
 		writef(w, "    %s  %d\n", k, counts[k])
+	}
+}
+
+func writeAttach(w io.Writer, service string, spans []ingest.Span) {
+	svc := ingest.ClipService(service)
+	names := ingest.UniqueServices(spans)
+	switch {
+	case svc != "":
+		writef(w, "attach  service=%s\n", svc)
+	case len(names) > 1:
+		writef(w, "attach  mixed  services=%s\n", strings.Join(names, ", "))
+		writef(w, "  pass -service to keep one OTEL resource\n")
+	case len(names) == 1:
+		writef(w, "attach  service=%s\n", names[0])
 	}
 }
 

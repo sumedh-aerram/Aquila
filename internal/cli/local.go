@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,24 +27,25 @@ const (
 	originNone  = "none"
 )
 
-func analyzeDiff(ctx context.Context, api, dir string, traces int, raw []byte) (impact.Report, string, error) {
+func analyzeDiff(ctx context.Context, api, dir string, traces int, service string, raw []byte) (impact.Report, string, error) {
 	parsed, err := diff.Parse(raw)
 	if err != nil {
 		return impact.Report{}, "", fmt.Errorf("cli: impact: %w", err)
 	}
 	if g := loadTargetSource(ctx, dir); g != nil {
-		rep, err := impactFromWindow(ctx, api, traces, g, parsed)
+		rep, err := impactFromWindow(ctx, api, traces, service, g, parsed)
 		return rep, originCwd, err
 	}
 	if controlPlaneDir(dir) {
-		rep, err := fetchImpact(ctx, api, traces, raw)
+		rep, err := fetchImpact(ctx, api, traces, service, raw)
 		return rep, originAPI, err
 	}
-	spans, err := fetchSpans(ctx, api, traces)
+	spans, err := fetchSpans(ctx, api, traces, service)
 	if err != nil {
-		return impact.Report{}, originFiles, err
+		return impact.Report{}, "", err
 	}
-	return impact.FromDiff(parsed, spans), originFiles, nil
+	rep := impact.FromDiff(parsed, spans)
+	return rep, originFiles, nil
 }
 
 func loadTargetSource(ctx context.Context, dir string) *source.Graph {
@@ -132,15 +134,24 @@ func readModulePath(dir string) string {
 	return ""
 }
 
-func impactFromWindow(ctx context.Context, api string, traces int, g *source.Graph, parsed diff.Diff) (impact.Report, error) {
-	spans, err := fetchSpans(ctx, api, traces)
+func impactFromWindow(ctx context.Context, api string, traces int, service string, g *source.Graph, parsed diff.Diff) (impact.Report, error) {
+	spans, err := fetchSpans(ctx, api, traces, service)
 	if err != nil {
 		return impact.Report{}, err
 	}
 	return impact.Analyze(g, parsed, locate.Bind(g, spans), graph.Build(spans)), nil
 }
 
-func fetchSpans(ctx context.Context, api string, traces int) ([]ingest.Span, error) {
+func windowQuery(traces int, service string) string {
+	q := url.Values{}
+	q.Set("traces", strconv.Itoa(clipTraces(traces)))
+	if s := ingest.ClipService(service); s != "" {
+		q.Set("service", s)
+	}
+	return "?" + q.Encode()
+}
+
+func fetchSpans(ctx context.Context, api string, traces int, service string) ([]ingest.Span, error) {
 	c, err := newClient(api)
 	if err != nil {
 		return nil, err
@@ -148,12 +159,14 @@ func fetchSpans(ctx context.Context, api string, traces int) ([]ingest.Span, err
 	var payload struct {
 		Spans []ingest.Span `json:"spans"`
 	}
-	path := "/v1/spans?traces=" + strconv.Itoa(clipTraces(traces))
-	if err := c.getJSON(ctx, path, &payload); err != nil {
+	if err := c.getJSON(ctx, "/v1/spans"+windowQuery(traces, service), &payload); err != nil {
 		return nil, err
 	}
 	if payload.Spans == nil {
 		payload.Spans = []ingest.Span{}
+	}
+	if s := ingest.ClipService(service); s != "" {
+		payload.Spans = ingest.SelectWindow(payload.Spans, traces, s)
 	}
 	return payload.Spans, nil
 }

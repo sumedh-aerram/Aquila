@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
@@ -498,6 +499,81 @@ func TestAllowsShopPair(t *testing.T) {
 	}
 	if allowsShopPair(t.TempDir(), shop) {
 		t.Fatal("-shop must not license a foreign -dir")
+	}
+}
+
+func TestRunWorkerRejectsInvalidJob(t *testing.T) {
+	t.Parallel()
+	err := RunWorker(t.Context(), []string{"-once", "-job", "not-hex"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "invalid job id") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestRunReplayMixedWindowRequiresService(t *testing.T) {
+	t.Parallel()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/spans" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{
+			"spans": []ingest.Span{
+				{ServiceName: "gateway", Kind: "server", HTTPMethod: http.MethodGet, HTTPRoute: "/users/{id}"},
+				{ServiceName: "ledger", Kind: "server", HTTPMethod: http.MethodGet, HTTPRoute: "/invoice"},
+			},
+		})
+	}))
+	t.Cleanup(api.Close)
+	err := RunReplay(t.Context(), []string{
+		"-api", api.URL,
+		"-base", "http://127.0.0.1:19191",
+		"-patch", "http://127.0.0.1:19192",
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "mixed services") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunReplayServiceDropsOtherAttachRoutes(t *testing.T) {
+	t.Parallel()
+	var queried string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/spans" {
+			http.NotFound(w, r)
+			return
+		}
+		queried = r.URL.Query().Get("service")
+		writeTestJSON(w, map[string]any{
+			"spans": []ingest.Span{
+				{TraceID: "shop", SpanID: "1", ServiceName: "gateway", Kind: "server", HTTPMethod: http.MethodGet, HTTPRoute: "/users/{id}", StartTime: time.Unix(20, 0).UTC()},
+				{TraceID: "app", SpanID: "2", ServiceName: "ledger", Kind: "server", HTTPMethod: http.MethodGet, HTTPRoute: "/invoice", StartTime: time.Unix(10, 0).UTC()},
+			},
+		})
+	}))
+	t.Cleanup(api.Close)
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/invoice" {
+			http.NotFound(w, r)
+			return
+		}
+		writeReplayJSON(w, map[string]any{"id": "inv-1"})
+	}))
+	t.Cleanup(gw.Close)
+	var out strings.Builder
+	err := RunReplay(t.Context(), []string{
+		"-api", api.URL, "-service", "ledger",
+		"-base", gw.URL, "-patch", gw.URL,
+	}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queried != "ledger" {
+		t.Fatalf("query service=%q", queried)
+	}
+	got := out.String()
+	if !strings.Contains(got, "GET /invoice") || strings.Contains(got, "/users") {
+		t.Fatalf("%s", got)
 	}
 }
 

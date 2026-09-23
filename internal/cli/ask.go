@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/graph"
@@ -21,6 +20,7 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
+	service := fs.String("service", "", "OTEL service.name; scopes the trace window")
 	file := fs.String("f", "", "optional unified diff to include impact facts")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: ask: %w", err)
@@ -35,15 +35,18 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		return err
 	}
 	n := clipTraces(*traces)
-	query := "?traces=" + strconv.Itoa(n)
+	query := windowQuery(n, *service)
 
 	var rt graph.Snapshot
 	if err := c.getJSON(ctx, "/v1/graph"+query, &rt); err != nil {
 		return err
 	}
-	_, loc, origin, spans, _, locErr := observeJoin(ctx, c, *api, *dir, n, query)
+	_, loc, origin, spans, _, locErr := observeJoin(ctx, c, *api, *dir, n, *service, query)
 	if locErr != nil && !unavailable(locErr) {
 		return locErr
+	}
+	if ingest.ClipService(*service) != "" {
+		rt = graph.Build(spans)
 	}
 
 	in := investigate.Input{
@@ -60,7 +63,7 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		if err != nil {
 			return fmt.Errorf("cli: ask: %w", err)
 		}
-		rep, _, err := analyzeDiff(ctx, *api, *dir, n, raw)
+		rep, _, err := analyzeDiff(ctx, *api, *dir, n, *service, raw)
 		if err != nil {
 			return err
 		}
@@ -68,7 +71,7 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 	} else if origin != originAPI {
 		raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", *dir)
 		if err == nil && len(raw) > 0 {
-			rep, _, err := analyzeDiff(ctx, *api, *dir, n, raw)
+			rep, _, err := analyzeDiff(ctx, *api, *dir, n, *service, raw)
 			if err != nil {
 				return err
 			}

@@ -359,7 +359,7 @@ func TestMemoryListTraceWindowKeepsCompleteTraces(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.ListTraceWindow(t.Context(), 1)
+	got, err := m.ListTraceWindow(t.Context(), 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}

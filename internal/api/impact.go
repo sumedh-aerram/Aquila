@@ -3,7 +3,6 @@ package api
 import (
 	"io"
 	"net/http"
-	"strconv"
 	"unicode/utf8"
 
 	"github.com/sumedhaerram/aquila/internal/diff"
@@ -37,20 +36,16 @@ func (s *Server) handleImpact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxTraces := 0
-	if q := r.URL.Query().Get("traces"); q != "" {
-		n, convErr := strconv.Atoi(q)
-		if convErr != nil || n < 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid traces"})
-			return
-		}
-		maxTraces = n
+	maxTraces, service, err := parseWindowQuery(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	var loc locate.Snapshot
 	var rt graph.Snapshot
 	if s.spans != nil {
-		spans, listErr := s.spans.ListTraceWindow(r.Context(), maxTraces)
+		spans, listErr := s.spans.ListTraceWindow(r.Context(), maxTraces, service)
 		if listErr != nil {
 			s.log.Error("list trace window", "err", listErr)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "impact failed"})
