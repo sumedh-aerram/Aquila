@@ -1,49 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 380" role="img" aria-labelledby="title desc">
-  <title id="title">How a checkout request moved through the demo shop</title>
-  <desc id="desc">Bold path is gateway to checkout to payment to processor. Also called: users, inventory, notification.</desc>
-  <rect x="16" y="16" width="848" height="348" rx="12" fill="#ffffff" stroke="#d0d7de"/>
-  <text x="40" y="50" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">How a checkout request moved</text>
-  <text x="40" y="72" fill="#656d76" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">Green is the path tied to the payment change. Blue is other hops from the same traffic.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 220" role="img" aria-labelledby="title desc">
+  <title id="title">Observed hop from inbox to notebox</title>
+  <desc id="desc">Nine traces showed inbox calling notebox on GET /inbox to GET /latest.</desc>
+  <rect x="16" y="16" width="848" height="188" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="40" y="50" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">What actually ran</text>
+  <text x="40" y="72" fill="#656d76" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">Separate app. Nine traces. One hop.</text>
 
-  <rect x="248" y="92" width="128" height="40" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
-  <text x="312" y="117" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">users</text>
+  <rect x="180" y="110" width="160" height="48" rx="8" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="260" y="139" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="15">inbox</text>
+  <text x="260" y="175" text-anchor="middle" fill="#656d76" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">GET /inbox</text>
 
-  <rect x="40" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
-  <text x="104" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">gateway</text>
+  <line x1="340" y1="134" x2="518" y2="134" stroke="#1a7f37" stroke-width="2.5"/>
+  <polygon points="528,134 516,128 516,140" fill="#1a7f37"/>
+  <text x="434" y="122" text-anchor="middle" fill="#656d76" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">n=9</text>
 
-  <rect x="248" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
-  <text x="312" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">checkout</text>
-
-  <rect x="456" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
-  <text x="520" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">payment</text>
-
-  <rect x="664" y="188" width="128" height="40" rx="8" fill="#dafbe1" stroke="#2da44e"/>
-  <text x="728" y="213" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">processor</text>
-
-  <rect x="200" y="296" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
-  <text x="264" y="321" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">inventory</text>
-
-  <rect x="376" y="296" width="140" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
-  <text x="446" y="321" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">notification</text>
-
-  <line x1="168" y1="208" x2="240" y2="208" stroke="#1a7f37" stroke-width="2.5"/>
-  <polygon points="248,208 238,203 238,213" fill="#1a7f37"/>
-
-  <line x1="376" y1="208" x2="448" y2="208" stroke="#1a7f37" stroke-width="2.5"/>
-  <polygon points="456,208 446,203 446,213" fill="#1a7f37"/>
-
-  <line x1="584" y1="208" x2="656" y2="208" stroke="#1a7f37" stroke-width="2.5"/>
-  <polygon points="664,208 654,203 654,213" fill="#1a7f37"/>
-
-  <path d="M104,188 C104,140 170,112 248,112" fill="none" stroke="#0969da" stroke-width="1.5"/>
-  <polygon points="248,112 239,108 239,118" fill="#0969da"/>
-
-  <line x1="312" y1="188" x2="312" y2="140" stroke="#0969da" stroke-width="1.5"/>
-  <polygon points="312,132 307,140 317,140" fill="#0969da"/>
-
-  <path d="M290,228 C250,256 236,276 256,296" fill="none" stroke="#8c959f" stroke-width="1.5"/>
-  <polygon points="264,296 255,290 259,300" fill="#8c959f"/>
-
-  <path d="M350,228 C400,260 420,278 438,296" fill="none" stroke="#8c959f" stroke-width="1.5"/>
-  <polygon points="446,296 436,290 440,302" fill="#8c959f"/>
+  <rect x="528" y="110" width="160" height="48" rx="8" fill="#dafbe1" stroke="#2da44e"/>
+  <text x="608" y="139" text-anchor="middle" fill="#1f2328" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="15">notebox</text>
+  <text x="608" y="175" text-anchor="middle" fill="#656d76" font-family="Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace" font-size="11">GET /latest</text>
 </svg>

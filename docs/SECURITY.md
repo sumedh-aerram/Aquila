@@ -24,6 +24,27 @@ OTLP ingest (`POST /v1/traces`) persists that same allowlisted metadata in Postg
 
 When `AQUILA_INGEST_TOKEN` is set, `POST /v1/traces` requires header `X-Aquila-Ingest-Token`. Local Compose uses the shared demo value `aquila-local-ingest`; do not reuse it outside loopback. An empty token keeps ingest open so unit tests and a lone binary still work. The token is compared via SHA-256 so length mismatches do not short-circuit the check. When `AQUILA_API_TOKEN` is set, `/v1/*` except traces and `/metrics` require `Authorization: Bearer` or `X-Aquila-Token`. `/healthz`, `/readyz`, and `/version` stay public for probes. An empty API token keeps the local loopback API open. Cloud Run Terraform sets both tokens.
 
+## Pen test (2026-09) and residual risk
+
+Fixed:
+
+- **Worker gRPC:** the listener requires `AQUILA_API_TOKEN` when it is set; a missing or wrong token is `Unauthenticated`.
+- **Replay, fault proxy, and job create:**
+  - They refuse link-local, multicast, and unspecified addresses and metadata hostnames.
+  - They check both the URL and the dialed IP, so DNS rebinding cannot reach them.
+  - Loopback and private ranges stay allowed because local gateways live there.
+- **Job URLs:** URLs with userinfo are rejected at create.
+- **OTLP ingest:** strips ANSI CSI/OSC/C1 sequences before control runes.
+- **`POST /v1/impact`:** returns `400` for a body with no diff file headers.
+- **Jobs and workload headers:** jobs refuse workloads that carry headers, so credentials never enter the job table. Local `experiment` expands `${VAR}` in header values, and evidence keeps header names only.
+
+Accepted for local development, not for any shared host:
+
+- **AQ-001:** with `AQUILA_API_TOKEN` empty, the HTTP API and worker gRPC are open. Compose binds them to `127.0.0.1`. Set the token before exposing either port.
+- **AQ-007:** Compose Grafana allows anonymous viewers and uses `admin` / `aquila`. Change both before exposing `:13000`.
+
+Rows ingested before the ANSI fix keep their original names.
+
 ## Agent restrictions
 
 The agent must never automatically:

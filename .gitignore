@@ -24,6 +24,7 @@ vendor/
 
 # Compose / data
 *.log
+/data/
 
 # Working notes and agent config — keep locally, do not publish
 /AGENTS.md
