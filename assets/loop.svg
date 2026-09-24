@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 168" role="img" aria-labelledby="title desc">
+  <title id="title">Aquila product loop</title>
+  <desc id="desc">Observe running traces, impact a local diff, experiment old vs new, earn validated only with evidence.</desc>
+  <rect x="16" y="16" width="848" height="136" rx="12" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="40" y="44" fill="#656d76" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="600">THE LOOP</text>
+
+  <rect x="40" y="60" width="168" height="68" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+  <text x="124" y="88" text-anchor="middle" fill="#0969da" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600">observe</text>
+  <text x="124" y="108" text-anchor="middle" fill="#424a53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">runtime hops + binds</text>
+
+  <line x1="208" y1="94" x2="236" y2="94" stroke="#8c959f" stroke-width="2"/>
+  <polygon points="242,94 232,89 232,99" fill="#8c959f"/>
+
+  <rect x="246" y="60" width="168" height="68" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+  <text x="330" y="88" text-anchor="middle" fill="#9a6700" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600">impact</text>
+  <text x="330" y="108" text-anchor="middle" fill="#424a53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">diff ) live routes</text>
+
+  <line x1="414" y1="94" x2="442" y2="94" stroke="#8c959f" stroke-width="2"/>
+  <polygon points="448,94 438,89 438,99" fill="#8c959f"/>
+
+  <rect x="452" y="60" width="168" height="68" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+  <text x="536" y="88" text-anchor="middle" fill="#1a7f37" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600">experiment</text>
+  <text x="536" y="108" text-anchor="middle" fill="#424a53" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">baseline vs patch</text>
+
+  <line x1="620" y1="94" x2="648" y2="94" stroke="#8c959f" stroke-width="2"/>
+  <polygon points="654,94 644,89 644,99" fill="#8c959f"/>
+
+  <rect x="658" y="60" width="178" height="68" rx="8" fill="#1f2328"/>
+  <text x="747" y="88" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600">validated</text>
+  <text x="747" y="108" text-anchor="middle" fill="#d0d7de" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">earned, never claimed</text>
+</svg>
