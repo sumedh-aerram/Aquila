@@ -9,9 +9,11 @@ import (
 	"io"
 
 	"github.com/sumedhaerram/aquila/internal/gitrev"
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/jobs"
 	"github.com/sumedhaerram/aquila/internal/plan"
+	"github.com/sumedhaerram/aquila/internal/replay"
 )
 
 // RunJob enqueues a plan as a durable DAG. It does not start Compose.
@@ -29,6 +31,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	smoke := fs.Bool("smoke", false, "latency n=1; cannot validate")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
 	service := fs.String("service", "", "OTEL service.name; scopes span-derived replay")
+	health := fs.String("health", replay.DefaultHealthPath, "GET route the env step probes on both gateways")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
@@ -63,6 +66,12 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if len(w.Steps) == 0 {
 		return fmt.Errorf("cli: job: empty workload")
 	}
+	for _, s := range w.Steps {
+		if len(s.Headers) > 0 {
+			return fmt.Errorf("cli: job: workload headers are not stored in jobs (they may hold credentials); run aquila experiment locally")
+		}
+	}
+	dag = plan.WithHealthPath(dag, *health)
 	sha, dirty, err := gitrev.State(ctx, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
@@ -79,6 +88,8 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 		Dirty:       dirty,
 		Workload:    w,
 		Plan:        dag,
+		Impacted:    impact.RuntimeRoutes(rep),
+		Direct:      len(rep.Direct),
 	})
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
@@ -97,6 +108,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	for _, t := range job.Tasks {
 		writef(stdout, "  %-14s %s\n", t.Kind, t.State)
 	}
+	writef(stdout, "impacted %d routes; validated needs the workload to reach one\n", len(job.Impacted))
 	writef(stdout, "not started by this command. aquila worker leases READY tasks.\n")
 	writef(stdout, "not validated.\n")
 	return nil
@@ -109,6 +121,7 @@ func RunJobs(ctx context.Context, args []string, stdout io.Writer) error {
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	limit := fs.Int("limit", jobs.DefaultList, "list limit (max 50)")
 	service := fs.String("service", "", "filter by recorded OTEL service.name")
+	asJSON := fs.Bool("json", false, "show: print the raw job document")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: jobs: %w", err)
 	}
@@ -151,15 +164,56 @@ func RunJobs(ctx context.Context, args []string, stdout io.Writer) error {
 		if err := c.getJSON(ctx, "/v1/jobs/"+rest[0], &job); err != nil {
 			return err
 		}
-		var buf bytes.Buffer
-		enc := json.NewEncoder(&buf)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(job); err != nil {
-			return fmt.Errorf("cli: jobs: %w", err)
+		if *asJSON {
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(job); err != nil {
+				return fmt.Errorf("cli: jobs: %w", err)
+			}
+			_, _ = stdout.Write(buf.Bytes())
+			return nil
 		}
-		_, _ = stdout.Write(buf.Bytes())
+		writeJob(stdout, job)
 		return nil
 	default:
 		return fmt.Errorf("cli: jobs: unexpected arguments")
+	}
+}
+
+func writeJob(w io.Writer, j jobs.Job) {
+	writef(w, "job      id=%s  status=%s  tasks=%d\n", j.ID, j.Status, len(j.Tasks))
+	if j.Service != "" {
+		writef(w, "service  %s\n", j.Service)
+	}
+	writef(w, "baseline %s\npatch    %s\n", j.Baseline, j.Patch)
+	if j.BaselineSHA != "" {
+		state := "clean"
+		if j.Dirty {
+			state = "dirty"
+		}
+		writef(w, "git      %s  %s\n", j.BaselineSHA, state)
+	}
+	results := make([]plan.StepResult, 0, len(j.Tasks))
+	for _, t := range j.Tasks {
+		results = append(results, t.Result)
+	}
+	refused := authRefused(results)
+	for _, t := range j.Tasks {
+		verdict := "-"
+		if t.Result.Verdict != "" {
+			verdict = t.Result.Verdict
+		}
+		writef(w, "  %-14s %-10s verdict=%-10s fence=%d  attempt=%s\n", t.Kind, t.State, verdict, t.Fence, t.AttemptID)
+		for _, n := range t.Result.Notes {
+			writef(w, "    notes      %s\n", n)
+		}
+		for _, lat := range t.Result.Latency {
+			writef(w, "    %-6s %-22s %s%s\n", lat.Method, clipRoute(lat.Path), formatLatency(lat), refused[lat.Method+" "+lat.Path])
+		}
+	}
+	writef(w, "validated  %t\n", j.Validated)
+	if !j.Validated {
+		writef(w, "not validated. match is not a pass.\n")
 	}
 }

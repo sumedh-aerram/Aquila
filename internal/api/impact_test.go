@@ -122,6 +122,16 @@ func TestImpactDoesNotEchoPatchBody(t *testing.T) {
 	}
 }
 
+func TestImpactRejectsNonDiffBody(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Source: impactGraph(t)})
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/impact", strings.NewReader("bad")))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestImpactRejectsGET(t *testing.T) {
 	t.Parallel()
 	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Ready: stubReady{}, Source: impactGraph(t)})

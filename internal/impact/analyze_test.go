@@ -167,3 +167,42 @@ func shopDir() string {
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "examples", "shop"))
 }
+
+func TestOverlappingFuncsIgnoresLinesBetweenFunctions(t *testing.T) {
+	t.Parallel()
+	funcs := []source.Node{
+		{ID: "a", Name: "writeSessionsError", Line: 14, EndLine: 20},
+		{ID: "b", Name: "writeMetricError", Line: 25, EndLine: 32},
+	}
+	tests := []struct {
+		name  string
+		lines []int
+		want  []string
+	}{
+		{"gap and doc comment", []int{21, 22, 23, 24}, nil},
+		{"new function body", []int{21, 25, 30}, []string{"writeMetricError"}},
+		{"closing brace", []int{20}, []string{"writeSessionsError"}},
+		{"after last function", []int{40}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got []string
+			for _, h := range overlappingFuncs(funcs, tc.lines) {
+				got = append(got, h.fn.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOverlappingFuncsFallsBackWithoutEndLine(t *testing.T) {
+	t.Parallel()
+	funcs := []source.Node{{ID: "a", Name: "A", Line: 1}, {ID: "b", Name: "B", Line: 10}}
+	hits := overlappingFuncs(funcs, []int{5})
+	if len(hits) != 1 || hits[0].fn.Name != "A" {
+		t.Fatalf("legacy snapshot without end_line: %+v", hits)
+	}
+}

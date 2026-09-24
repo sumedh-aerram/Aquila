@@ -34,6 +34,23 @@ func TestSanitizeFileRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestSanitizeTextStripsTerminalSequences(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"evil\x1b[31mPWNED\x1b[0m":        "evilPWNED",
+		"/\x1b[2J\x1b[HANSI":              "/ANSI",
+		"a\x1b]0;title\x07b":              "ab",
+		"x\u009b1;31my":                   "xy",
+		"GET /users/{id}":                 "GET /users/{id}",
+		"plain [31m brackets stay honest": "plain [31m brackets stay honest",
+	}
+	for in, want := range tests {
+		if got := sanitizeText(in, 256); got != want {
+			t.Errorf("sanitizeText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestClipRunesDoesNotSplitUTF8(t *testing.T) {
 	t.Parallel()
 	s := clipRunes("hé", 1)

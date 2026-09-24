@@ -44,7 +44,7 @@ func ExecuteWith(ctx context.Context, lease jobs.Lease, cache *action.Cache) (pl
 	if n < 1 {
 		n = 1
 	}
-	dag := plan.DAG{Steps: []plan.Step{{
+	dag := plan.DAG{HealthPath: lease.Job.Plan.HealthPath, Steps: []plan.Step{{
 		ID:       lease.Task.PlanID,
 		Kind:     lease.Task.Kind,
 		Required: true,

@@ -16,9 +16,9 @@ func nowUTC() time.Time { return time.Now().UTC() }
 
 var contentJSON = grpc.CallContentSubtype("json")
 
-// Server is a gRPC worker endpoint.
-func Server(store jobs.Store) *grpc.Server {
-	s := grpc.NewServer()
+// Server is a gRPC worker endpoint. A non-empty token is required on every call.
+func Server(store jobs.Store, token string) *grpc.Server {
+	s := grpc.NewServer(grpc.UnaryInterceptor(tokenInterceptor(token)))
 	Register(s, store)
 	return s
 }
@@ -37,11 +37,11 @@ func Listen(addr string) (net.Listener, error) {
 }
 
 // Serve serves the worker protocol on ln until ctx is cancelled.
-func Serve(ctx context.Context, ln net.Listener, store jobs.Store) error {
+func Serve(ctx context.Context, ln net.Listener, store jobs.Store, token string) error {
 	if ln == nil {
 		return fmt.Errorf("worker: listener required")
 	}
-	s := Server(store)
+	s := Server(store, token)
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ln) }()
 	select {
@@ -55,20 +55,25 @@ func Serve(ctx context.Context, ln net.Listener, store jobs.Store) error {
 }
 
 // ListenAndServe binds addr and serves until ctx is cancelled.
-func ListenAndServe(ctx context.Context, addr string, store jobs.Store) error {
+func ListenAndServe(ctx context.Context, addr string, store jobs.Store, token string) error {
 	ln, err := Listen(addr)
 	if err != nil {
 		return err
 	}
-	return Serve(ctx, ln, store)
+	return Serve(ctx, ln, store, token)
 }
 
-// Dial returns a gRPC client for addr using the JSON worker codec.
-func Dial(addr string) (*grpc.ClientConn, error) {
+// Dial returns a gRPC client for addr using the JSON worker codec. A non-empty
+// token is sent as a bearer credential on every call.
+func Dial(addr, token string) (*grpc.ClientConn, error) {
 	if addr == "" {
 		return nil, fmt.Errorf("worker: grpc addr required")
 	}
-	return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if token != "" {
+		opts = append(opts, grpc.WithPerRPCCredentials(bearer(token)))
+	}
+	return grpc.NewClient(addr, opts...)
 }
 
 // ClientLease leases one task over gRPC.

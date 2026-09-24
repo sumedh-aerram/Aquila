@@ -62,7 +62,7 @@ func TestGRPCRejectsStaleAttempt(t *testing.T) {
 func grpcPipe(t *testing.T, st jobs.Store) (*grpc.ClientConn, func()) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
-	s := Server(st)
+	s := Server(st, "")
 	go func() { _ = s.Serve(lis) }()
 	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

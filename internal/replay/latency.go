@@ -7,6 +7,24 @@ import (
 
 const minPercentileN = 20
 
+// A step's latency has shifted when the patch median is more than
+// ShiftRatio times the baseline median and at least ShiftMinNS slower. Both
+// bounds must hold so sub-millisecond noise on fast routes does not trip it.
+const (
+	ShiftRatio = 2
+	ShiftMinNS = int64(5_000_000)
+)
+
+// Shifted reports whether l crosses the documented shift bounds. Steps
+// without successful samples on both sides are not judged here.
+func Shifted(l StepLatency) bool {
+	if l.Baseline.N == 0 || l.Patch.N == 0 {
+		return false
+	}
+	b, p := l.Baseline.MedNS, l.Patch.MedNS
+	return p > ShiftRatio*b && p-b >= ShiftMinNS
+}
+
 // Summary is nearest-rank latency of successful samples only. Missing
 // percentiles are withheld rather than invented.
 type Summary struct {

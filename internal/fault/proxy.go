@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sumedhaerram/aquila/internal/netguard"
 )
 
 const (
@@ -52,8 +54,12 @@ func Handler(target string, spec Spec) (http.Handler, error) {
 	if spec.Status < 0 || spec.Status > 599 {
 		return nil, fmt.Errorf("fault: status out of range")
 	}
+	if err := netguard.CheckURL(u.String()); err != nil {
+		return nil, fmt.Errorf("fault: %w", err)
+	}
 	client := &http.Client{
-		Timeout: 8 * time.Second,
+		Timeout:   8 * time.Second,
+		Transport: netguard.Transport(),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req.URL.Host != u.Host {
 				return http.ErrUseLastResponse

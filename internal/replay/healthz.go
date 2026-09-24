@@ -6,35 +6,52 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/sumedhaerram/aquila/internal/netguard"
 )
 
 const healthzTimeout = 3 * time.Second
 
+// DefaultHealthPath is probed when the operator names no health route.
+const DefaultHealthPath = "/healthz"
+
 // Healthz checks GET /healthz on baseline and patch. It does not follow
 // cross-host redirects and does not treat a 200 as a pass.
 func Healthz(ctx context.Context, baseline, patch string) error {
-	if err := oneHealthz(ctx, baseline); err != nil {
-		return fmt.Errorf("replay: baseline healthz: %w", err)
+	return HealthzPath(ctx, baseline, patch, DefaultHealthPath)
+}
+
+// HealthzPath is Healthz against an operator-named route such as /health.
+func HealthzPath(ctx context.Context, baseline, patch, path string) error {
+	if path == "" {
+		path = DefaultHealthPath
 	}
-	if err := oneHealthz(ctx, patch); err != nil {
-		return fmt.Errorf("replay: patch healthz: %w", err)
+	if !safeReplay(http.MethodGet, path) {
+		return fmt.Errorf("replay: health path %q is not a local GET path", path)
+	}
+	if err := oneHealthz(ctx, baseline, path); err != nil {
+		return fmt.Errorf("replay: baseline GET %s: %w", path, err)
+	}
+	if err := oneHealthz(ctx, patch, path); err != nil {
+		return fmt.Errorf("replay: patch GET %s: %w", path, err)
 	}
 	return nil
 }
 
-func oneHealthz(ctx context.Context, target string) error {
+func oneHealthz(ctx context.Context, target, path string) error {
 	base, err := parseTarget(target)
 	if err != nil {
 		return err
 	}
 	stepCtx, cancel := context.WithTimeout(ctx, healthzTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(stepCtx, http.MethodGet, base+"/healthz", nil)
+	req, err := http.NewRequestWithContext(stepCtx, http.MethodGet, base+path, nil)
 	if err != nil {
 		return err
 	}
 	client := &http.Client{
-		Timeout: healthzTimeout,
+		Timeout:   healthzTimeout,
+		Transport: netguard.Transport(),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")

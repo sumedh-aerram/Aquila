@@ -47,14 +47,29 @@ func Markdown(a Artifact) string {
 	if len(a.Impact.DirectName) > 0 {
 		b.WriteString("direct: " + strings.Join(a.Impact.DirectName, ", ") + "\n")
 	}
+	if c := a.Coverage; c != nil {
+		b.WriteString("\n## Coverage\n\n")
+		b.WriteString("impacted=" + strconv.Itoa(len(c.Impacted)) +
+			"  exercised=" + strconv.Itoa(len(c.Exercised)) +
+			"  missed=" + strconv.Itoa(len(c.Missed)) + "\n")
+		for _, r := range c.Exercised {
+			b.WriteString("- exercised " + r + "\n")
+		}
+		for _, r := range c.Missed {
+			b.WriteString("- missed " + r + "\n")
+		}
+	}
 	b.WriteString("\n## Workload\n\n")
 	if len(a.Workload) == 0 {
 		b.WriteString("(none)\n")
 	} else {
 		for _, r := range a.Workload {
-			b.WriteString("- " + r.Method + " " + r.Path)
+			b.WriteString("- " + r.Method + " " + clipQuery(r.Path))
 			if r.Provenance != "" {
 				b.WriteString("  " + r.Provenance)
+			}
+			if len(r.Headers) > 0 {
+				b.WriteString("  headers=" + strings.Join(r.Headers, ","))
 			}
 			b.WriteString("\n")
 		}
@@ -68,7 +83,7 @@ func Markdown(a Artifact) string {
 		b.WriteString("\n")
 		if s.Kind == plan.KindLatency {
 			for _, lat := range s.Latency {
-				b.WriteString("  - " + lat.Method + " " + lat.Path + "  " + latencyLine(lat) + "\n")
+				b.WriteString("  - " + lat.Method + " " + clipQuery(lat.Path) + "  " + latencyLine(lat) + "\n")
 			}
 		}
 	}
@@ -108,4 +123,13 @@ func formatDur(ns int64) string {
 		return "-"
 	}
 	return strconv.FormatFloat(float64(ns)/1e6, 'f', 1, 64) + "ms"
+}
+
+// clipQuery hides query values in shareable Markdown; they can carry
+// credentials. The JSON artifact keeps the operator's path for replay.
+func clipQuery(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		return p[:i] + "?…"
+	}
+	return p
 }

@@ -77,7 +77,7 @@ func writeReplay(w io.Writer, load replay.Workload, base, patch replay.Result, r
 			ver = rep.Steps[i].Status
 		}
 		writef(w, "  %s %s  %s  %s/%s  %s/%s%s\n",
-			st.Method, st.Path, ver, bs, ps, formatDur(bd), formatDur(pd), note)
+			st.Method, clipRoute(st.Path), ver, bs, ps, formatDur(bd), formatDur(pd), note)
 		writef(w, "    provenance %s\n", st.Provenance)
 		if i < len(lat) {
 			writef(w, "    latency    %s\n", formatLatency(lat[i]))

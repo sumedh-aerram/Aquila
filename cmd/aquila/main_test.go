@@ -43,6 +43,17 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandHelpPrintsUsage(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	if err := run([]string{"experiment", "-h"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "-workload path") {
+		t.Fatalf("usage not printed: %q", out.String())
+	}
+}
+
 func TestRunNoArgs(t *testing.T) {
 	t.Parallel()
 	if err := run(nil, io.Discard, io.Discard); err != nil {

@@ -32,6 +32,8 @@ type Node struct {
 	Pkg  string `json:"pkg,omitempty"`
 	File string `json:"file,omitempty"`
 	Line int    `json:"line,omitempty"`
+	// EndLine is the closing line of a function body; zero when unknown.
+	EndLine int `json:"end_line,omitempty"`
 }
 
 // Edge is a directed relation between two nodes.

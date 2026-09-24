@@ -81,6 +81,17 @@ func TestCreateRunRejectsPass(t *testing.T) {
 	}
 }
 
+func TestCreateRunExplainsRejection(t *testing.T) {
+	t.Parallel()
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Runs: runs.NewMemory()})
+	raw := []byte(`{"schema":"aquila.evidence.v1","validated":false,"result":{"overall":"match"},"module":"example.com/x"}`)
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(raw)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `unknown field \"module\"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateRunUnavailableWithoutStore(t *testing.T) {
 	t.Parallel()
 	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{})

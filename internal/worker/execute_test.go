@@ -129,3 +129,38 @@ func mustPlan(t *testing.T) plan.DAG {
 	}
 	return plan.WithLatencyN(dag, 1)
 }
+
+func TestExecuteEnvProbesJobHealthPath(t *testing.T) {
+	t.Parallel()
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(gw.Close)
+	st := jobs.NewMemory()
+	if _, err := st.Create(t.Context(), jobs.CreateOpts{
+		Baseline: gw.URL,
+		Patch:    gw.URL,
+		Workload: replay.Workload{Steps: []replay.Step{{Method: http.MethodGet, Path: "/health"}}},
+		Plan:     plan.WithHealthPath(mustPlan(t), "/health"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := st.Lease(t.Context(), jobs.Worker{ID: "w1"}, nowUTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := ExecuteWith(t.Context(), lease, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Verdict != plan.VerdictPrepared {
+		t.Fatalf("env ignored the job health path: %+v", res)
+	}
+	def := action.FromLease(lease)
+	lease.Job.Plan.HealthPath = ""
+	if action.Digest(def) == action.Digest(action.FromLease(lease)) {
+		t.Fatal("cache key must differ by health path")
+	}
+}

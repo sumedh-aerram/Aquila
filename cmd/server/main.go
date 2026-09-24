@@ -50,7 +50,10 @@ func main() {
 		Spans:  ingest.NewPostgres(db.Pool()),
 		Source: src,
 		Runs:   runs.NewPostgres(db.Pool()),
-		Jobs:   jobs.NewPostgres(db.Pool()),
+		Jobs: jobs.NewPostgres(db.Pool()).WithQuota(jobs.Quota{
+			ActiveJobs:  cfg.Worker.ActiveJobsPerService,
+			LeasedTasks: cfg.Worker.LeasedTasksPerService,
+		}),
 	})
 	if err := srv.ListenAndServe(ctx); err != nil {
 		log.Error("server exited", "err", err)

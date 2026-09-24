@@ -19,7 +19,7 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 GO          ?= go
 GOBIN       := $(CURDIR)/bin
 AQUILA      := $(GOBIN)/aquila
-COMPOSE     := docker compose -f deploy/compose/docker-compose.yaml -f deploy/compose/docker-compose.shop.yaml
+COMPOSE     := AQUILA_VERSION='$(VERSION)' docker compose -f deploy/compose/docker-compose.yaml -f deploy/compose/docker-compose.shop.yaml
 GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 SHOP_GW     := http://127.0.0.1:18080

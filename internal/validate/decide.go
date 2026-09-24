@@ -3,6 +3,7 @@ package validate
 import (
 	"strings"
 
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
@@ -17,6 +18,13 @@ type Input struct {
 	Patch       string
 	Plan        plan.DAG
 	Result      plan.Evidence
+	// Impacted is the "METHOD /path" routes joined to the change at runtime.
+	// When non-empty, some Workload step must reach one of them.
+	Impacted []string
+	Workload []replay.Step
+	// Direct is how many functions the diff changed. Changed code with no
+	// impacted route means the window never saw it run, so nothing was covered.
+	Direct int
 }
 
 // Earned reports whether required executable experiments completed with
@@ -53,7 +61,40 @@ func Earned(in Input) bool {
 	if _, ok := by[plan.KindLatency]; !ok {
 		return false
 	}
-	return true
+	if len(in.Impacted) == 0 {
+		return in.Direct == 0
+	}
+	return Covered(in.Impacted, in.Workload, in.Result)
+}
+
+// Covered reports whether some workload step hit an impacted route and both
+// revisions answered it from a handler: a recorded status on each side that
+// is not an auth refusal. A planned request that never got a reply is not
+// coverage.
+func Covered(impacted []string, work []replay.Step, res plan.Evidence) bool {
+	answered := map[string]struct{}{}
+	for _, s := range res.Steps {
+		if s.Kind != plan.KindBehavior {
+			continue
+		}
+		for _, d := range s.Steps {
+			if d.BaselineStatus == 0 || d.PatchStatus == 0 || d.AuthRejected() {
+				continue
+			}
+			answered[d.Method+" "+d.Path] = struct{}{}
+		}
+	}
+	for _, st := range work {
+		if _, ok := answered[st.Method+" "+st.Path]; !ok {
+			continue
+		}
+		for _, route := range impacted {
+			if impact.RouteMatches(route, st.Method, st.Path) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func byKind(steps []plan.StepResult) map[string]plan.StepResult {
@@ -86,6 +127,11 @@ func stepOK(want plan.Step, got plan.StepResult) bool {
 		}
 		if n < minLatencyN {
 			return false
+		}
+		for _, l := range got.Latency {
+			if replay.Shifted(l) {
+				return false
+			}
 		}
 		return latencyN(got) >= minLatencyN
 	default:

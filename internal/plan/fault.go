@@ -78,7 +78,7 @@ func probeStep(w replay.Workload) replay.Step {
 	if len(w.Steps) > 0 {
 		return w.Steps[0]
 	}
-	return replay.Step{Method: http.MethodGet, Path: "/healthz"}
+	return replay.Step{Method: http.MethodGet, Path: replay.DefaultHealthPath}
 }
 
 func compareBurst(base, patch []replay.Result) StepResult {
@@ -96,11 +96,16 @@ func compareBurst(base, patch []replay.Result) StepResult {
 		return out
 	}
 	out.Notes = []string{fmt.Sprintf("baseline_errors=%d/%d patch_errors=%d/%d", be, bn, pe, pn)}
-	if pe > be {
+	switch {
+	case pe > be:
 		out.Verdict = replay.VerdictDiffer
-		return out
+		out.Notes = append(out.Notes, "patch errors more under concurrency")
+	case pe < be:
+		out.Verdict = replay.VerdictDiffer
+		out.Notes = append(out.Notes, "patch errors less under concurrency")
+	default:
+		out.Verdict = replay.VerdictMatch
 	}
-	out.Verdict = replay.VerdictMatch
 	return out
 }
 

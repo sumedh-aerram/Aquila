@@ -21,7 +21,7 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
+	if len(args) == 0 || wantsHelp(args[1:]) {
 		printUsage(stdout)
 		return nil
 	}
@@ -104,7 +104,7 @@ Commands:
   job         Enqueue a plan as a durable DAG for a worker (does not start compose)
   jobs        List, show, or cancel persisted jobs
   attaches    OTEL service.name values in the span store (not tenants)
-  worker      Single gRPC worker: lease one executable task and commit
+  worker      gRPC worker: lease READY tasks and commit (loops; -once for one)
   version     Print the Aquila version
   help        Show this help
 
@@ -122,6 +122,7 @@ Flags:
   -patch url      replay/experiment: patch gateway
   -fixture        replay/experiment: shop smoke requests (not span-derived)
   -workload path  replay/experiment: operator JSON steps (bodies never from traces)
+  -health path    experiment/job: GET route the env step probes (default /healthz)
   -smoke          experiment/job: latency n=1; cannot validate
   -apply          patch/run: write the candidate onto the module tree (not a pass)
   -plan-only      run: investigate, plan, and candidate only
@@ -164,7 +165,8 @@ candidate, and experiment. patch emits the first matching shop rewrite (D1-D6)
 and does not write the tree unless -apply. job records env READY first;
 overlapping jobs on the same gateway host are refused. jobs cancel <id> stops
 remaining READY tasks. a 10m deadline fails unfinished tasks. worker leases one
-READY task over gRPC, runs it, and commits with an attempt id. worker -job pins
+READY tasks over gRPC, runs them, and commits with an attempt id until
+interrupted (-once leases one and exits). worker -job pins
 the lease to that DAG. a stale attempt cannot commit. AQUILA_API_TOKEN, when
 set, is sent as Authorization: Bearer. There is no LLM.
 `
@@ -252,6 +254,10 @@ func flagN(args []string, def int) int {
 		n = 100
 	}
 	return n
+}
+
+func wantsHelp(args []string) bool {
+	return hasFlag(args, "-h") || hasFlag(args, "-help") || hasFlag(args, "--help")
 }
 
 func hasFlag(args []string, name string) bool {

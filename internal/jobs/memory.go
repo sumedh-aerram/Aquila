@@ -16,11 +16,20 @@ type Memory struct {
 	mu    sync.Mutex
 	byID  map[string]Job
 	order []string
+	quota Quota
 }
 
 // NewMemory returns an empty Memory store.
 func NewMemory() *Memory {
 	return &Memory{byID: make(map[string]Job)}
+}
+
+// WithQuota sets per-service limits and returns m.
+func (m *Memory) WithQuota(q Quota) *Memory {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.quota = q
+	return m
 }
 
 // Create implements Store.
@@ -37,8 +46,12 @@ func (m *Memory) Create(ctx context.Context, opts CreateOpts) (Job, error) {
 	if m.byID == nil {
 		m.byID = make(map[string]Job)
 	}
+	_ = m.requeueExpiredLocked(time.Now().UTC())
 	if gatewayBusy(m.jobs(), job) {
 		return Job{}, ErrBusy
+	}
+	if overActive(m.jobs(), job, m.quota) {
+		return Job{}, ErrQuota
 	}
 	m.byID[job.ID] = cloneJob(job)
 	m.order = append(m.order, job.ID)
@@ -148,36 +161,27 @@ func (m *Memory) Lease(ctx context.Context, w Worker, now time.Time) (Lease, err
 		}
 		wantJob = id
 	}
-	for _, id := range m.order {
-		if wantJob != "" && id != wantJob {
-			continue
-		}
-		job := m.byID[id]
-		if job.Canceled || job.Status == StatusCanceled {
-			continue
-		}
-		for i := range job.Tasks {
-			t := &job.Tasks[i]
-			if t.State != StateReady || t.Operator {
-				continue
-			}
-			t.State = StateLeased
-			t.AttemptID = newID()
-			t.Fence++
-			t.WorkerID = workerID
-			t.LeaseUntil = now.Add(leaseTTL)
-			job.Status = jobStatus(job.Tasks)
-			m.byID[id] = job
-			return Lease{
-				Job:     cloneJob(job),
-				Task:    job.Tasks[i],
-				N:       t.N,
-				Fence:   t.Fence,
-				Attempt: t.AttemptID,
-			}, nil
-		}
+	all := m.jobs()
+	ji, ti, ok := pickReady(all, wantJob, m.quota)
+	if !ok {
+		return Lease{}, ErrNoReady
 	}
-	return Lease{}, ErrNoReady
+	job := cloneJob(all[ji])
+	t := &job.Tasks[ti]
+	t.State = StateLeased
+	t.AttemptID = newID()
+	t.Fence++
+	t.WorkerID = workerID
+	t.LeaseUntil = now.Add(leaseTTL)
+	job.Status = jobStatus(job.Tasks)
+	m.byID[job.ID] = job
+	return Lease{
+		Job:     cloneJob(job),
+		Task:    job.Tasks[ti],
+		N:       t.N,
+		Fence:   t.Fence,
+		Attempt: t.AttemptID,
+	}, nil
 }
 
 func (m *Memory) jobs() []Job {

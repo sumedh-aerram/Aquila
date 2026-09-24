@@ -109,7 +109,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		go func() {
 			s.log.Info("worker grpc", "addr", s.cfg.Worker.Addr)
-			if err := worker.Serve(ctx, ln, s.jobs); err != nil {
+			if err := worker.Serve(ctx, ln, s.jobs, s.cfg.Server.Token); err != nil {
 				s.log.Error("worker grpc", "err", err)
 			}
 		}()

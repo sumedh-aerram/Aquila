@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/sumedhaerram/aquila/internal/version"
 )
 
 type healthBody struct {
@@ -51,6 +53,9 @@ func RunStatus(ctx context.Context, args []string, stdout io.Writer) error {
 
 	writef(stdout, "api      %s\n", c.base)
 	writef(stdout, "version  %s\n", ver.Version)
+	if skew := versionSkew(ver.Version); skew != "" {
+		writef(stdout, "skew     %s\n", skew)
+	}
 	writef(stdout, "health   %s\n", emptyDash(health.Status))
 	if readyErr != nil {
 		writef(stdout, "ready    unavailable\n")
@@ -64,6 +69,16 @@ func RunStatus(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("cli: api not ready")
 	}
 	return nil
+}
+
+// versionSkew names a CLI/API build mismatch. Artifacts from a newer CLI can
+// carry fields an older API rejects, so the operator needs to rebuild.
+func versionSkew(api string) string {
+	cli := version.Version
+	if api == cli || api == "" || cli == "" || cli == "dev" {
+		return ""
+	}
+	return fmt.Sprintf("api=%s cli=%s; rebuild the control plane with make dev", api, cli)
 }
 
 func emptyDash(s string) string {

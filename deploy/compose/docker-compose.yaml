@@ -90,6 +90,8 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      args:
+        VERSION: ${AQUILA_VERSION:-dev}
     environment:
       AQUILA_CONFIG: /etc/aquila/server.yaml
       AQUILA_POSTGRES_URL: postgres://aquila:aquila@postgres:5432/aquila?sslmode=disable

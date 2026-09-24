@@ -2,11 +2,13 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/netguard"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
@@ -94,6 +96,8 @@ type Job struct {
 	Dirty       bool      `json:"dirty,omitempty"`
 	Deadline    time.Time `json:"deadline,omitempty"`
 	Canceled    bool      `json:"canceled,omitempty"`
+	Impacted    []string  `json:"impacted,omitempty"`
+	Direct      int       `json:"direct,omitempty"`
 	Workload    []Step    `json:"workload"`
 	Plan        plan.DAG  `json:"plan"`
 	Tasks       []Task    `json:"tasks"`
@@ -110,6 +114,63 @@ type CreateOpts struct {
 	Deadline    time.Time       `json:"deadline,omitempty"`
 	Workload    replay.Workload `json:"workload"`
 	Plan        plan.DAG        `json:"plan"`
+	Impacted    []string        `json:"impacted,omitempty"`
+	Direct      int             `json:"direct,omitempty"`
+}
+
+type createWire struct {
+	Baseline    string       `json:"baseline"`
+	Patch       string       `json:"patch"`
+	Service     string       `json:"service,omitempty"`
+	BaselineSHA string       `json:"baseline_sha,omitempty"`
+	Dirty       bool         `json:"dirty,omitempty"`
+	Deadline    time.Time    `json:"deadline,omitempty"`
+	Workload    workloadWire `json:"workload"`
+	Plan        plan.DAG     `json:"plan"`
+	Impacted    []string     `json:"impacted,omitempty"`
+	Direct      int          `json:"direct,omitempty"`
+}
+
+type workloadWire struct {
+	Steps []Step `json:"steps"`
+}
+
+// MarshalJSON keeps request bodies on the wire; replay.Step omits them so
+// trace-derived workloads never serialize bodies.
+func (o CreateOpts) MarshalJSON() ([]byte, error) {
+	return json.Marshal(createWire{
+		Baseline:    o.Baseline,
+		Patch:       o.Patch,
+		Service:     o.Service,
+		BaselineSHA: o.BaselineSHA,
+		Dirty:       o.Dirty,
+		Deadline:    o.Deadline,
+		Workload:    workloadWire{Steps: workloadOf(o.Workload)},
+		Plan:        o.Plan,
+		Impacted:    o.Impacted,
+		Direct:      o.Direct,
+	})
+}
+
+// UnmarshalJSON is the inverse of MarshalJSON.
+func (o *CreateOpts) UnmarshalJSON(raw []byte) error {
+	var w createWire
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return err
+	}
+	*o = CreateOpts{
+		Baseline:    w.Baseline,
+		Patch:       w.Patch,
+		Service:     w.Service,
+		BaselineSHA: w.BaselineSHA,
+		Dirty:       w.Dirty,
+		Deadline:    w.Deadline,
+		Workload:    replayWorkload(w.Workload.Steps),
+		Plan:        w.Plan,
+		Impacted:    w.Impacted,
+		Direct:      w.Direct,
+	}
+	return nil
 }
 
 // Lease is a worker claim on one executable task.
@@ -211,6 +272,12 @@ func validateCreate(opts CreateOpts) error {
 	if !strings.HasPrefix(opts.Patch, "http://") && !strings.HasPrefix(opts.Patch, "https://") {
 		return fmt.Errorf("jobs: patch must be http or https")
 	}
+	if err := netguard.CheckURL(opts.Baseline); err != nil {
+		return fmt.Errorf("jobs: baseline: %w", err)
+	}
+	if err := netguard.CheckURL(opts.Patch); err != nil {
+		return fmt.Errorf("jobs: patch: %w", err)
+	}
 	if len(opts.Plan.Steps) == 0 {
 		return fmt.Errorf("jobs: empty plan")
 	}
@@ -222,6 +289,14 @@ func validateCreate(opts CreateOpts) error {
 	}
 	if len(opts.Workload.Steps) > maxSteps {
 		return fmt.Errorf("jobs: too many workload steps")
+	}
+	if len(opts.Impacted) > maxSteps {
+		return fmt.Errorf("jobs: too many impacted routes")
+	}
+	for _, r := range opts.Impacted {
+		if len(r) > 512 || strings.ContainsAny(r, "\r\n\x00") {
+			return fmt.Errorf("jobs: invalid impacted route")
+		}
 	}
 	for _, s := range opts.Workload.Steps {
 		if len(s.Body) > maxBody {

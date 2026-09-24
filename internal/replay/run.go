@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sumedhaerram/aquila/internal/netguard"
 )
 
 const (
@@ -42,7 +44,8 @@ func Run(ctx context.Context, target string, w Workload) (Result, error) {
 		return Result{}, fmt.Errorf("replay: empty workload")
 	}
 	client := &http.Client{
-		Timeout: stepTimeout,
+		Timeout:   stepTimeout,
+		Transport: netguard.Transport(),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")
@@ -70,7 +73,12 @@ func runStep(ctx context.Context, client *http.Client, base string, st Step) Obs
 		obs.Err = err.Error()
 		return obs
 	}
-	if len(st.Body) > 0 {
+	for k, vs := range st.Headers {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	if len(st.Body) > 0 && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	start := time.Now()
@@ -121,6 +129,9 @@ func parseTarget(raw string) (string, error) {
 	}
 	if u.User != nil {
 		return "", fmt.Errorf("replay: target must not include userinfo")
+	}
+	if err := netguard.CheckURL(u.String()); err != nil {
+		return "", fmt.Errorf("replay: %w", err)
 	}
 	u.Path = ""
 	u.RawQuery = ""

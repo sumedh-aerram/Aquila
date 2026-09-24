@@ -16,12 +16,19 @@ import (
 
 // Postgres stores jobs in aquila.jobs.
 type Postgres struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	quota Quota
 }
 
 // NewPostgres returns a Store backed by pool. pool must be non-nil.
 func NewPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
+}
+
+// WithQuota sets per-service limits and returns p. Call before serving.
+func (p *Postgres) WithQuota(q Quota) *Postgres {
+	p.quota = q
+	return p
 }
 
 const insertJobSQL = `
@@ -74,6 +81,9 @@ func (p *Postgres) Create(ctx context.Context, opts CreateOpts) (Job, error) {
 	if _, err := tx.Exec(ctx, occupancyLockSQL); err != nil {
 		return Job{}, fmt.Errorf("jobs: %w", err)
 	}
+	if _, err := expireTx(ctx, tx, time.Now().UTC()); err != nil {
+		return Job{}, err
+	}
 	found, err := lockJobs(ctx, tx)
 	if err != nil {
 		return Job{}, err
@@ -84,6 +94,9 @@ func (p *Postgres) Create(ctx context.Context, opts CreateOpts) (Job, error) {
 	}
 	if gatewayBusy(existing, job) {
 		return Job{}, ErrBusy
+	}
+	if overActive(existing, job, p.quota) {
+		return Job{}, ErrQuota
 	}
 	raw, err := json.Marshal(job)
 	if err != nil {
@@ -192,42 +205,32 @@ func (p *Postgres) Lease(ctx context.Context, w Worker, now time.Time) (Lease, e
 		}
 		return Lease{}, ErrCapacity
 	}
-	for _, r := range found {
-		if wantJob != "" && r.job.ID != wantJob {
-			continue
+	ji, ti, ok := pickReady(all, wantJob, p.quota)
+	if !ok {
+		if err := tx.Commit(ctx); err != nil {
+			return Lease{}, fmt.Errorf("jobs: %w", err)
 		}
-		job := r.job
-		if job.Canceled || job.Status == StatusCanceled {
-			continue
-		}
-		for i := range job.Tasks {
-			t := &job.Tasks[i]
-			if t.State != StateReady || t.Operator {
-				continue
-			}
-			t.State = StateLeased
-			t.AttemptID = newID()
-			t.Fence++
-			t.WorkerID = workerID
-			t.LeaseUntil = now.Add(leaseTTL)
-			refreshJob(&job)
-			raw, err := json.Marshal(job)
-			if err != nil {
-				return Lease{}, fmt.Errorf("jobs: %w", err)
-			}
-			if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw, job.Validated); err != nil {
-				return Lease{}, fmt.Errorf("jobs: %w", err)
-			}
-			if err := tx.Commit(ctx); err != nil {
-				return Lease{}, fmt.Errorf("jobs: %w", err)
-			}
-			return Lease{Job: job, Task: job.Tasks[i], N: t.N, Fence: t.Fence, Attempt: t.AttemptID}, nil
-		}
+		return Lease{}, ErrNoReady
+	}
+	job := all[ji]
+	t := &job.Tasks[ti]
+	t.State = StateLeased
+	t.AttemptID = newID()
+	t.Fence++
+	t.WorkerID = workerID
+	t.LeaseUntil = now.Add(leaseTTL)
+	refreshJob(&job)
+	raw, err := json.Marshal(job)
+	if err != nil {
+		return Lease{}, fmt.Errorf("jobs: %w", err)
+	}
+	if _, err := tx.Exec(ctx, updateJobSQL, job.ID, job.Status, raw, job.Validated); err != nil {
+		return Lease{}, fmt.Errorf("jobs: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Lease{}, fmt.Errorf("jobs: %w", err)
 	}
-	return Lease{}, ErrNoReady
+	return Lease{Job: job, Task: job.Tasks[ti], N: t.N, Fence: t.Fence, Attempt: t.AttemptID}, nil
 }
 
 type jobRow struct {

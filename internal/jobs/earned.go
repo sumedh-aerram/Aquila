@@ -30,6 +30,9 @@ func jobEarned(job Job) bool {
 		Patch:       job.Patch,
 		Plan:        job.Plan,
 		Result:      jobEvidence(job),
+		Impacted:    job.Impacted,
+		Direct:      job.Direct,
+		Workload:    Workload(job).Steps,
 	})
 }
 
@@ -77,7 +80,16 @@ func applyCancel(job *Job) {
 }
 
 func failDeadline(job *Job, now time.Time) bool {
-	if job.Deadline.IsZero() || !now.After(job.Deadline) {
+	deadline := job.Deadline
+	if deadline.IsZero() {
+		if job.Created.IsZero() {
+			return false
+		}
+		// Rows written before deadlines existed would otherwise hold their
+		// gateway and quota forever.
+		deadline = job.Created.Add(DefaultDeadline)
+	}
+	if !now.After(deadline) {
 		return false
 	}
 	if job.Canceled || job.Status == StatusComplete || job.Status == StatusFailed || job.Status == StatusCanceled {

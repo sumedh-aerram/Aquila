@@ -22,9 +22,10 @@ type fileDoc struct {
 }
 
 type fileStep struct {
-	Method string          `json:"method"`
-	Path   string          `json:"path"`
-	Body   json.RawMessage `json:"body"`
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Body    json.RawMessage   `json:"body"`
+	Headers map[string]string `json:"headers"`
 }
 
 // ReadFile loads an operator workload. Bodies come from the file, never from spans.
@@ -63,10 +64,15 @@ func ReadFile(path string) (Workload, error) {
 		if err != nil {
 			return Workload{}, fmt.Errorf("replay: workload step %d: %w", i, err)
 		}
+		hdr, err := fileHeaders(st.Headers)
+		if err != nil {
+			return Workload{}, fmt.Errorf("replay: workload step %d: %w", i, err)
+		}
 		out.Steps = append(out.Steps, Step{
 			Method:     method,
 			Path:       p,
 			Body:       body,
+			Headers:    hdr,
 			Provenance: ProvenanceFile,
 		})
 	}

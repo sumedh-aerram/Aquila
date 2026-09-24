@@ -216,7 +216,10 @@ func overlappingFuncs(funcs []source.Node, lines []int) []funcHit {
 	spans := make([]span, 0, len(funcs))
 	for i, fn := range funcs {
 		end := math.MaxInt
-		if i+1 < len(funcs) {
+		switch {
+		case fn.EndLine >= fn.Line && fn.EndLine > 0:
+			end = fn.EndLine + 1
+		case i+1 < len(funcs):
 			end = funcs[i+1].Line
 		}
 		spans = append(spans, span{n: fn, end: end})

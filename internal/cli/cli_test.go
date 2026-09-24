@@ -1098,6 +1098,32 @@ func TestRunPatchWritesCandidate(t *testing.T) {
 	}
 }
 
+func TestRunPatchScopesService(t *testing.T) {
+	t.Parallel()
+	shop := filepath.Clean(filepath.Join("..", "..", "examples", "shop"))
+	var gotService atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/spans" {
+			gotService.Store(r.URL.Query().Get("service"))
+			writeTestJSON(w, map[string]any{"spans": []any{}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	raw, err := os.ReadFile(filepath.Join("..", "pair", "testdata", "d1.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := RunPatch(t.Context(), []string{"-api", srv.URL, "-dir", shop, "-service", "gateway"}, bytes.NewReader(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := gotService.Load().(string); s != "gateway" {
+		t.Fatalf("service=%q", s)
+	}
+}
+
 func TestRunPatchFromControlPlaneDir(t *testing.T) {
 	t.Parallel()
 	root := filepath.Clean(filepath.Join("..", ".."))

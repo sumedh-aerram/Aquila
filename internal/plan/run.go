@@ -3,9 +3,18 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
+
+// routePath drops the query so notes stay short and do not echo query values.
+func routePath(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		return p[:i]
+	}
+	return p
+}
 
 // Evidence is executed and skipped DAG steps. Overall is match, differ, or
 // incomplete — never pass.
@@ -22,6 +31,7 @@ type StepResult struct {
 	Verdict string               `json:"verdict"`
 	Notes   []string             `json:"notes,omitempty"`
 	Latency []replay.StepLatency `json:"latency,omitempty"`
+	Steps   []replay.Delta       `json:"steps,omitempty"`
 }
 
 type execData struct {
@@ -38,7 +48,7 @@ type execData struct {
 }
 
 // Execute runs executable DAG steps against base and patch. Operator steps
-// are skipped. Env probes GET /healthz. Fault is a one-sided inject probe
+// are skipped. Env probes GET dag.HealthPath (default /healthz). Fault is a one-sided inject probe
 // and does not vote overall.
 func Execute(ctx context.Context, dag DAG, base, patch string, w replay.Workload) (Evidence, error) {
 	if err := replay.CheckTarget(base); err != nil {
@@ -95,7 +105,7 @@ func Execute(ctx context.Context, dag DAG, base, patch string, w replay.Workload
 func probeEnv(ctx context.Context, dag DAG, base, patch string) error {
 	for _, s := range dag.Steps {
 		if s.Kind == KindEnv && !s.Operator {
-			return replay.Healthz(ctx, base, patch)
+			return replay.HealthzPath(ctx, base, patch, dag.HealthPath)
 		}
 	}
 	return nil
@@ -122,12 +132,16 @@ func evalStep(s Step, data execData) StepResult {
 	case KindBehavior:
 		rep := compareFirst(data.base, data.patch)
 		out.Verdict = rep.Verdict
-		if len(rep.Steps) > 0 {
-			var notes []string
-			for _, d := range rep.Steps {
-				notes = append(notes, d.Notes...)
+		out.Steps = rep.Steps
+		for _, d := range rep.Steps {
+			if len(d.Notes) == 0 {
+				continue
 			}
-			out.Notes = notes
+			note := fmt.Sprintf("%s %s %d/%d %s", d.Method, routePath(d.Path), d.BaselineStatus, d.PatchStatus, strings.Join(d.Notes, ","))
+			if d.AuthRejected() {
+				note += ": handler did not run; check workload headers"
+			}
+			out.Notes = append(out.Notes, note)
 		}
 	case KindLatency:
 		if len(data.base) == 0 || len(data.patch) == 0 {
@@ -143,6 +157,12 @@ func evalStep(s Step, data execData) StepResult {
 			return out
 		}
 		out.Verdict = VerdictSamples
+		for _, l := range lat {
+			if replay.Shifted(l) {
+				out.Notes = append(out.Notes, fmt.Sprintf("latency_shift %s %s median %.1fms -> %.1fms (> %dx and >= %dms slower); blocks validated",
+					l.Method, routePath(l.Path), float64(l.Baseline.MedNS)/1e6, float64(l.Patch.MedNS)/1e6, replay.ShiftRatio, replay.ShiftMinNS/1e6))
+			}
+		}
 	case KindConcurrency:
 		got := compareBurst(data.baseBurst, data.patchBurst)
 		got.ID = s.ID

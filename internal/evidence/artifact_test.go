@@ -62,7 +62,11 @@ func TestBuildEarnsValidated(t *testing.T) {
 		Patch:       "http://127.0.0.1:18280",
 		BaselineSHA: "abc123",
 		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
-		Impact:      impact.Report{Files: []string{"a.go"}, Direct: []impact.Finding{{Name: "F"}}},
+		Impact: impact.Report{
+			Files:   []string{"a.go"},
+			Direct:  []impact.Finding{{Name: "F"}},
+			Runtime: []impact.Finding{{Name: "F", Route: "GET /healthz"}},
+		},
 		Plan: plan.DAG{Steps: []plan.Step{
 			{ID: "env", Kind: plan.KindEnv, Required: true},
 			{ID: "behavior", Kind: plan.KindBehavior, Required: true},
@@ -72,7 +76,7 @@ func TestBuildEarnsValidated(t *testing.T) {
 			Overall: replay.VerdictMatch,
 			Steps: []plan.StepResult{
 				{ID: "env", Kind: plan.KindEnv, Verdict: plan.VerdictPrepared},
-				{ID: "behavior", Kind: plan.KindBehavior, Verdict: replay.VerdictMatch},
+				answered(replay.Step{Method: "GET", Path: "/healthz"}).Steps[0],
 				{ID: "latency", Kind: plan.KindLatency, Verdict: plan.VerdictSamples, Latency: lat},
 			},
 		},
@@ -118,6 +122,15 @@ func TestDecodeRejectsUnknownSchema(t *testing.T) {
 	raw := []byte(`{"schema":"aquila.evidence.v0","validated":false,"result":{"overall":"match"}}`)
 	if _, err := Decode(bytes.NewReader(raw)); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDecodeNamesUnknownField(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{"schema":"aquila.evidence.v1","validated":false,"result":{"overall":"match"},"from_newer_cli":1}`)
+	_, err := Decode(bytes.NewReader(raw))
+	if err == nil || !strings.Contains(err.Error(), "from_newer_cli") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

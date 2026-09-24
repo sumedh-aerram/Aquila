@@ -36,7 +36,7 @@ func RunWorker(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		*jobID = id
 	}
-	conn, err := worker.Dial(*addr)
+	conn, err := worker.Dial(*addr, envToken())
 	if err != nil {
 		return fmt.Errorf("cli: worker: %w", err)
 	}

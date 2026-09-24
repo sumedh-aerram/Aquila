@@ -54,7 +54,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	a, err := evidence.Decode(bytes.NewReader(raw))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid artifact"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid artifact: " + clipQuery(err.Error(), 200)})
 		return
 	}
 	rec, err := s.runStore.Insert(r.Context(), runs.Record{Artifact: a})

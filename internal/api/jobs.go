@@ -42,6 +42,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "gateway occupied"})
 			return
 		}
+		if errors.Is(err, jobs.ErrQuota) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "service quota exceeded"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid job"})
 		return
 	}

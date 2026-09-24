@@ -121,6 +121,7 @@ type builder struct {
 	edges  []Edge
 	seenN  map[string]struct{}
 	seenE  map[string]struct{}
+	ends   map[string]int
 	funcs  int
 }
 
@@ -131,6 +132,7 @@ func newBuilder(module, root string, fset *token.FileSet) *builder {
 		fset:   fset,
 		seenN:  make(map[string]struct{}),
 		seenE:  make(map[string]struct{}),
+		ends:   make(map[string]int),
 	}
 }
 
@@ -223,6 +225,7 @@ func (b *builder) walkFile(pkg *packages.Package, file *ast.File, fid string) er
 			return false
 		}
 		b.funcs++
+		b.ends[fnNode.ID] = b.fset.Position(fn.End()).Line
 		if err := b.edge(fid, fnNode.ID, EdgeContains, ProvenanceSyntax); err != nil {
 			walkErr = err
 			return false
@@ -313,6 +316,11 @@ func (b *builder) edge(from, to, kind, provenance string) error {
 }
 
 func (b *builder) graph() (*Graph, error) {
+	for i := range b.nodes {
+		if end, ok := b.ends[b.nodes[i].ID]; ok {
+			b.nodes[i].EndLine = end
+		}
+	}
 	sort.Slice(b.nodes, func(i, j int) bool { return b.nodes[i].ID < b.nodes[j].ID })
 	sort.Slice(b.edges, func(i, j int) bool {
 		if b.edges[i].From != b.edges[j].From {

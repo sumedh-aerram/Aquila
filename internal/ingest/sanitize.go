@@ -4,13 +4,19 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
+// Terminal escape sequences are removed whole; dropping only the ESC byte
+// would leave "[31m" in operator output.
+var ansiSeq = regexp.MustCompile("(\x1b\\[|\u009b)[0-?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)?|\x1b[@-Z\\\\-_]")
+
 func sanitizeText(s string, max int) string {
 	s = strings.ToValidUTF8(s, "")
+	s = ansiSeq.ReplaceAllString(s, "")
 	s = strings.Map(func(r rune) rune {
 		if r < 32 || r == 127 {
 			return -1

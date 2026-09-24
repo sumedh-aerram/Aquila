@@ -19,6 +19,7 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	fs.SetOutput(io.Discard)
 	api := fs.String("api", envAPI(), "control-plane base URL")
 	traces := fs.Int("traces", defaultTraces, "trace window (max 200)")
+	service := fs.String("service", "", "OTEL service.name; scopes the trace window")
 	dir := fs.String("dir", ".", "module under change (default cwd)")
 	file := fs.String("f", "", "diff file (default stdin)")
 	apply := fs.Bool("apply", false, "write the candidate onto the module tree (not a pass)")
@@ -33,7 +34,7 @@ func RunPatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	if err != nil {
 		return fmt.Errorf("cli: patch: %w", err)
 	}
-	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, "", raw)
+	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, *service, raw)
 	if err != nil {
 		return err
 	}

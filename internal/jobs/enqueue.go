@@ -65,6 +65,8 @@ func buildJob(opts CreateOpts) (Job, error) {
 		Deadline:    deadline,
 		Workload:    workloadOf(opts.Workload),
 		Plan:        opts.Plan,
+		Impacted:    append([]string(nil), opts.Impacted...),
+		Direct:      opts.Direct,
 		Tasks:       tasks,
 		Validated:   false,
 	}, nil

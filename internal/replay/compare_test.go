@@ -47,6 +47,39 @@ func TestCompareDetectsStatusMismatch(t *testing.T) {
 	}
 }
 
+func TestCompareAuthRejectedOnBothSidesIsIncomplete(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		base, patch int
+		want        string
+	}{
+		{"401 both", 401, 401, VerdictIncomplete},
+		{"403 both", 403, 403, VerdictIncomplete},
+		{"401 vs 403", 401, 403, VerdictIncomplete},
+		{"patch broke auth", 200, 401, VerdictDiffer},
+		{"ok both", 200, 200, VerdictMatch},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base := Result{Steps: []Observation{{Method: http.MethodGet, Path: "/user/me", Status: tc.base}}}
+			patch := Result{Steps: []Observation{{Method: http.MethodGet, Path: "/user/me", Status: tc.patch}}}
+			rep := Compare(base, patch)
+			if rep.Verdict != tc.want {
+				t.Fatalf("verdict=%s steps=%+v", rep.Verdict, rep.Steps)
+			}
+			d := rep.Steps[0]
+			if d.BaselineStatus != tc.base || d.PatchStatus != tc.patch {
+				t.Fatalf("statuses not recorded: %+v", d)
+			}
+			if d.AuthRejected() != (tc.want == VerdictIncomplete) {
+				t.Fatalf("auth_rejected=%v", d.AuthRejected())
+			}
+		})
+	}
+}
+
 func TestCompareDetectsSelectedFieldChange(t *testing.T) {
 	t.Parallel()
 	base := Result{Steps: []Observation{{

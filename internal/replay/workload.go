@@ -20,11 +20,12 @@ const (
 
 // Step is one HTTP request in a workload. Bodies are never taken from spans.
 type Step struct {
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	Body       []byte `json:"-"`
-	Provenance string `json:"provenance"`
-	Service    string `json:"service,omitempty"`
+	Method     string      `json:"method"`
+	Path       string      `json:"path"`
+	Body       []byte      `json:"-"`
+	Headers    http.Header `json:"-"`
+	Provenance string      `json:"provenance"`
+	Service    string      `json:"service,omitempty"`
 }
 
 // Workload is an ordered list of requests to send to a gateway.

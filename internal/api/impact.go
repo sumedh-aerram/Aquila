@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"unicode/utf8"
@@ -33,6 +34,10 @@ func (s *Server) handleImpact(w http.ResponseWriter, r *http.Request) {
 	parsed, err := diff.Parse(raw)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid diff"})
+		return
+	}
+	if len(bytes.TrimSpace(raw)) > 0 && len(parsed.Files) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no file headers in diff"})
 		return
 	}
 

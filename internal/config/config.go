@@ -59,9 +59,12 @@ type SourceConfig struct {
 	Snapshot string `yaml:"snapshot"`
 }
 
-// WorkerConfig is the gRPC listen address for a single worker.
+// WorkerConfig is the worker gRPC listen address and per-service job quotas.
+// Zero quotas take the jobs package defaults.
 type WorkerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr                  string `yaml:"addr"`
+	ActiveJobsPerService  int    `yaml:"active_jobs_per_service"`
+	LeasedTasksPerService int    `yaml:"leased_tasks_per_service"`
 }
 
 type PostgresConfig struct {
@@ -156,6 +159,16 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("AQUILA_WORKER_ADDR"); v != "" {
 		cfg.Worker.Addr = v
 	}
+	if v := os.Getenv("AQUILA_ACTIVE_JOBS_PER_SERVICE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Worker.ActiveJobsPerService = n
+		}
+	}
+	if v := os.Getenv("AQUILA_LEASED_TASKS_PER_SERVICE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Worker.LeasedTasksPerService = n
+		}
+	}
 	if v := os.Getenv("AQUILA_API_TOKEN"); v != "" {
 		cfg.Server.Token = v
 	}
@@ -207,6 +220,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Worker.Addr) == "" {
 		return fmt.Errorf("worker.addr is required")
+	}
+	if c.Worker.ActiveJobsPerService < 0 || c.Worker.LeasedTasksPerService < 0 {
+		return fmt.Errorf("worker quotas must not be negative")
 	}
 	return nil
 }

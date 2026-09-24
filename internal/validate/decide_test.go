@@ -86,3 +86,63 @@ func earnedInput() Input {
 		},
 	}
 }
+
+func TestEarnedBlockedByLatencyShift(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		base, patch int64
+		want        bool
+	}{
+		{"chaos proxy +1500ms", 200_000, 1_502_000_000, false},
+		{"2.5x but only +0.3ms", 200_000, 500_000, true},
+		{"+6ms but only 1.5x", 12_000_000, 18_000_000, true},
+		{"3x and +10ms", 5_000_000, 15_000_000, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := earnedInput()
+			in.Result.Steps[2].Latency[0].Baseline.MedNS = tc.base
+			in.Result.Steps[2].Latency[0].Patch.MedNS = tc.patch
+			if got := Earned(in); got != tc.want {
+				t.Fatalf("earned=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEarnedRequiresImpactedRouteReached(t *testing.T) {
+	t.Parallel()
+	in := earnedInput()
+	in.Impacted = []string{"GET /latency", "GET /users/{id}"}
+	in.Workload = []replay.Step{{Method: "GET", Path: "/health"}}
+	if Earned(in) {
+		t.Fatal("earned with a workload that never touched an impacted route")
+	}
+	in.Workload = append(in.Workload, replay.Step{Method: "GET", Path: "/users/42?x=1"})
+	if Earned(in) {
+		t.Fatal("earned on a planned request that has no recorded reply")
+	}
+	in.Result.Steps[1].Steps = []replay.Delta{{Method: "GET", Path: "/users/42?x=1", BaselineStatus: 200, PatchStatus: 200}}
+	if !Earned(in) {
+		t.Fatal("templated impacted route was reached")
+	}
+	in.Result.Steps[1].Steps = []replay.Delta{{Method: "GET", Path: "/users/42?x=1", BaselineStatus: 401, PatchStatus: 401, Notes: []string{replay.NoteAuthRejected}}}
+	if Earned(in) {
+		t.Fatal("earned when the only impacted request was refused by auth")
+	}
+}
+
+func TestEarnedNeedsRuntimeJoinForChangedCode(t *testing.T) {
+	t.Parallel()
+	in := earnedInput()
+	in.Direct = 3
+	if Earned(in) {
+		t.Fatal("changed functions with no impacted route must not earn validated")
+	}
+	in.Direct = 0
+	if !Earned(in) {
+		t.Fatal("a diff with no changed functions has nothing to cover")
+	}
+}

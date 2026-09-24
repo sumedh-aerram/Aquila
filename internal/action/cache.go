@@ -23,6 +23,7 @@ type Key struct {
 	BaselineSHA string `json:"baseline_sha"`
 	N           int    `json:"n"`
 	Workload    string `json:"workload"`
+	HealthPath  string `json:"health_path,omitempty"`
 }
 
 // Digest is the SHA-256 of the canonical key.
@@ -46,6 +47,7 @@ func FromLease(lease jobs.Lease) Key {
 		BaselineSHA: lease.Job.BaselineSHA,
 		N:           n,
 		Workload:    string(w),
+		HealthPath:  lease.Job.Plan.HealthPath,
 	}
 }
 

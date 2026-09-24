@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -43,6 +44,7 @@ type DAG struct {
 	Notes        []string `json:"notes,omitempty"`
 	Module       string   `json:"module,omitempty"`
 	TestPackages []string `json:"test_packages,omitempty"`
+	HealthPath   string   `json:"health_path,omitempty"`
 }
 
 // FromImpact builds a DAG from impact findings. Tests are added later via
@@ -114,6 +116,23 @@ func WithLatencyN(dag DAG, n int) DAG {
 	for i := range steps {
 		if steps[i].Kind == KindLatency {
 			steps[i].N = n
+		}
+	}
+	dag.Steps = steps
+	return dag
+}
+
+// WithHealthPath returns a copy whose env step probes path instead of /healthz.
+func WithHealthPath(dag DAG, path string) DAG {
+	path = strings.TrimSpace(path)
+	if path == "" || path == replay.DefaultHealthPath {
+		return dag
+	}
+	dag.HealthPath = path
+	steps := append([]Step(nil), dag.Steps...)
+	for i := range steps {
+		if steps[i].Kind == KindEnv {
+			steps[i].Reason = strings.ReplaceAll(steps[i].Reason, "GET "+replay.DefaultHealthPath, "GET "+path)
 		}
 	}
 	dag.Steps = steps

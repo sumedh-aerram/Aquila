@@ -13,12 +13,32 @@ const (
 	VerdictIncomplete = "incomplete"
 )
 
+// NoteAuthRejected marks a step both sides refused with 401 or 403. The
+// handler under test never ran, so the step is incomplete, not a match.
+const NoteAuthRejected = "auth_rejected"
+
 // Delta is one step comparison. There is no pass score.
 type Delta struct {
-	Method string   `json:"method"`
-	Path   string   `json:"path"`
-	Status string   `json:"status"`
-	Notes  []string `json:"notes,omitempty"`
+	Method         string   `json:"method"`
+	Path           string   `json:"path"`
+	Status         string   `json:"status"`
+	BaselineStatus int      `json:"baseline_status,omitempty"`
+	PatchStatus    int      `json:"patch_status,omitempty"`
+	Notes          []string `json:"notes,omitempty"`
+}
+
+// AuthRejected reports whether d was refused by auth on both sides.
+func (d Delta) AuthRejected() bool {
+	for _, n := range d.Notes {
+		if n == NoteAuthRejected {
+			return true
+		}
+	}
+	return false
+}
+
+func authStatus(code int) bool {
+	return code == 401 || code == 403
 }
 
 // Report compares two replays of the same workload.
@@ -92,6 +112,12 @@ func compareObs(a, b Observation) Delta {
 		if b.Err != "" {
 			d.Notes = append(d.Notes, "error:patch:"+b.Err)
 		}
+		return d
+	}
+	d.BaselineStatus, d.PatchStatus = a.Status, b.Status
+	if authStatus(a.Status) && authStatus(b.Status) {
+		d.Status = VerdictIncomplete
+		d.Notes = append(d.Notes, NoteAuthRejected)
 		return d
 	}
 	if a.Status != b.Status {

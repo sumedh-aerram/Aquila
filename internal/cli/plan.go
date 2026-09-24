@@ -127,6 +127,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	pairDir := fs.String("pair", filepath.Join("out", "env"), "parent directory for a local pair")
 	basePort := fs.Int("base-port", 0, "baseline gateway host port (default 18180)")
 	patchPort := fs.Int("patch-port", 0, "patch gateway host port (default 18280)")
+	health := fs.String("health", replay.DefaultHealthPath, "GET route the env step probes on both gateways")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
@@ -163,6 +164,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		dag = plan.WithLatencyN(dag, 1)
 	}
 	dag = plan.WithTests(dag, patchModule(ctx, *dir), rep.Files)
+	dag = plan.WithHealthPath(dag, *health)
 
 	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, *dir)
 	if err != nil {
@@ -224,6 +226,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		Result:      ev,
 	})
 	writeEvidence(stdout, ev)
+	writeCoverage(stdout, art.Coverage, art.Impact.Direct)
 	writeValidated(stdout, art.Validated)
 	if sha != "" {
 		state := "clean"
@@ -253,12 +256,19 @@ func writeEvidence(w io.Writer, ev plan.Evidence) {
 		}
 	}
 	writef(w, "experiment  overall=%s  steps=%d  skipped=%d\n", ev.Overall, len(ev.Steps), skipped)
+	refused := authRefused(ev.Steps)
 	for _, s := range ev.Steps {
 		writef(w, "  %-14s %s\n", s.Kind, s.Verdict)
 		if s.Kind == plan.KindLatency {
 			for _, lat := range s.Latency {
-				writef(w, "    latency    %s\n", formatLatency(lat))
+				writef(w, "    %-6s %-22s %s%s\n", lat.Method, clipRoute(lat.Path), formatLatency(lat), refused[lat.Method+" "+lat.Path])
 			}
+		}
+		if s.Kind == plan.KindBehavior && len(s.Steps) > 0 {
+			for _, d := range s.Steps {
+				writef(w, "    %-6s %-22s %d/%d  %s%s\n", d.Method, clipRoute(d.Path), d.BaselineStatus, d.PatchStatus, d.Status, deltaNotes(d))
+			}
+			continue
 		}
 		if len(s.Notes) > 0 && s.Verdict != plan.VerdictSkipped {
 			writef(w, "    notes      %s\n", joinNotes(s.Notes))
@@ -266,6 +276,66 @@ func writeEvidence(w io.Writer, ev plan.Evidence) {
 	}
 	for _, n := range ev.Notes {
 		writef(w, "note         %s\n", n)
+	}
+}
+
+// authRefused marks latency rows whose request was 401/403 on both sides:
+// those samples time the auth check, not the handler.
+func authRefused(results []plan.StepResult) map[string]string {
+	out := map[string]string{}
+	for _, r := range results {
+		for _, d := range r.Steps {
+			if d.AuthRejected() {
+				out[d.Method+" "+d.Path] = "  auth_rejected"
+			}
+		}
+	}
+	return out
+}
+
+func clipRoute(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		return p[:i] + "?…"
+	}
+	return p
+}
+
+func deltaNotes(d replay.Delta) string {
+	if len(d.Notes) == 0 {
+		return ""
+	}
+	if d.AuthRejected() {
+		return "  auth_rejected: handler did not run; check workload headers"
+	}
+	return "  " + strings.Join(d.Notes, ",")
+}
+
+func writeCoverage(w io.Writer, c *evidence.Coverage, direct int) {
+	if c == nil && direct > 0 {
+		writef(w, "coverage   none: %d changed functions, no observed route runs them; validated needs one (drive traffic or raise -traces)\n", direct)
+		return
+	}
+	if c == nil {
+		writef(w, "coverage   no changed functions to cover\n")
+		return
+	}
+	writef(w, "coverage   impacted=%d  exercised=%d  missed=%d\n", len(c.Impacted), len(c.Exercised), len(c.Missed))
+	for _, r := range c.Exercised {
+		writef(w, "  hit      %s\n", r)
+	}
+	rejected := map[string]struct{}{}
+	for _, r := range c.Rejected {
+		rejected[r] = struct{}{}
+	}
+	for _, r := range c.Missed {
+		if _, ok := rejected[r]; ok {
+			writef(w, "  missed   %s  auth_rejected (401/403 on both sides; handler did not run)\n", r)
+			continue
+		}
+		writef(w, "  missed   %s\n", r)
+	}
+	if len(c.Exercised) == 0 {
+		writef(w, "  no impacted route got a request; validated cannot be earned\n")
 	}
 }
 

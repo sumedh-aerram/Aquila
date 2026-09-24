@@ -135,11 +135,17 @@ func recordRun(ctx context.Context, api string, stdout io.Writer, a evidence.Art
 	var out storedRun
 	if err := c.postJSON(ctx, "/v1/runs", "application/json", raw, &out); err != nil {
 		writef(stdout, "unrecorded %s\n", err)
+		var ver versionBody
+		if c.getJSON(ctx, "/version", &ver) == nil {
+			if skew := versionSkew(ver.Version); skew != "" {
+				writef(stdout, "skew       %s\n", skew)
+			}
+		}
 		return
 	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
-	if out.Validated {
-		writef(stdout, "validated  true\n")
+	if out.Validated != a.Validated {
+		writef(stdout, "validated  %t  (server re-derived; local said %t)\n", out.Validated, a.Validated)
 	}
 }
 
