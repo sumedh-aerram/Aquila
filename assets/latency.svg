@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 502" role="img" aria-label="Median latency per route, baseline vs refactor">
+<rect width="880" height="502" rx="10" fill="#0d1117"/>
+<rect x="0.5" y="0.5" width="879" height="501" rx="10" fill="none" stroke="#30363d"/>
+<text x="20" y="30" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="600">Median latency per route: baseline vs refactor</text>
+<text x="20" y="50" fill="#7d8590" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">n=20 successful samples per route per side, laptop loopback. Not a benchmark.</text>
+<path d="M190.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="190.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">0</text>
+<path d="M295.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="295.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">2</text>
+<path d="M400.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="400.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">4</text>
+<path d="M505.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="505.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">6</text>
+<path d="M610.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="610.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">8</text>
+<path d="M715.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="715.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">10</text>
+<path d="M820.0 70 V438" stroke="#30363d" stroke-width="1"/>
+<text x="820.0" y="454" text-anchor="middle" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">12</text>
+<text x="180" y="89" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/health</text>
+<rect x="190" y="78" width="15.8" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="87" width="21.0" height="8" rx="2" fill="#58a6ff"/>
+<text x="219.0" y="91" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">0.3 / 0.4</text>
+<text x="180" y="115" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/session</text>
+<rect x="190" y="104" width="52.5" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="113" width="57.8" height="8" rx="2" fill="#58a6ff"/>
+<text x="255.8" y="117" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">1.0 / 1.1</text>
+<text x="180" y="141" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/items</text>
+<rect x="190" y="130" width="52.5" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="139" width="52.5" height="8" rx="2" fill="#58a6ff"/>
+<text x="250.5" y="143" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">1.0 / 1.0</text>
+<text x="180" y="167" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/items/active</text>
+<rect x="190" y="156" width="588.0" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="165" width="572.2" height="8" rx="2" fill="#58a6ff"/>
+<text x="786.0" y="169" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">11.2 / 10.9</text>
+<text x="180" y="193" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/items/summary</text>
+<rect x="190" y="182" width="210.0" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="191" width="199.5" height="8" rx="2" fill="#58a6ff"/>
+<text x="408.0" y="195" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">4.0 / 3.8</text>
+<text x="180" y="219" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/summary</text>
+<rect x="190" y="208" width="189.0" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="217" width="189.0" height="8" rx="2" fill="#58a6ff"/>
+<text x="387.0" y="221" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">3.6 / 3.6</text>
+<text x="180" y="245" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/score</text>
+<rect x="190" y="234" width="299.2" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="243" width="283.5" height="8" rx="2" fill="#58a6ff"/>
+<text x="497.2" y="247" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">5.7 / 5.4</text>
+<text x="180" y="271" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/score/history</text>
+<rect x="190" y="260" width="299.2" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="269" width="283.5" height="8" rx="2" fill="#58a6ff"/>
+<text x="497.2" y="273" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">5.7 / 5.4</text>
+<text x="180" y="297" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/reports/daily</text>
+<rect x="190" y="286" width="351.8" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="295" width="325.5" height="8" rx="2" fill="#58a6ff"/>
+<text x="549.8" y="299" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">6.7 / 6.2</text>
+<text x="180" y="323" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/reports/weekly</text>
+<rect x="190" y="312" width="351.8" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="321" width="341.2" height="8" rx="2" fill="#58a6ff"/>
+<text x="549.8" y="325" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">6.7 / 6.5</text>
+<text x="180" y="349" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/stats/average</text>
+<rect x="190" y="338" width="409.5" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="347" width="399.0" height="8" rx="2" fill="#58a6ff"/>
+<text x="607.5" y="351" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">7.8 / 7.6</text>
+<text x="180" y="375" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/usage</text>
+<rect x="190" y="364" width="194.2" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="373" width="183.8" height="8" rx="2" fill="#58a6ff"/>
+<text x="392.2" y="377" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">3.7 / 3.5</text>
+<text x="180" y="401" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/stats/distribution</text>
+<rect x="190" y="390" width="299.2" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="399" width="299.2" height="8" rx="2" fill="#58a6ff"/>
+<text x="497.2" y="403" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">5.7 / 5.7</text>
+<text x="180" y="427" text-anchor="end" fill="#e6edf3" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="12">/catalog</text>
+<rect x="190" y="416" width="78.8" height="8" rx="2" fill="#6e7681"/>
+<rect x="190" y="425" width="78.8" height="8" rx="2" fill="#58a6ff"/>
+<text x="276.8" y="429" fill="#7d8590" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="11">1.5 / 1.5</text>
+<text x="505.0" y="472" text-anchor="middle" fill="#7d8590" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">median latency (ms)</text>
+<rect x="20" y="462" width="12" height="8" rx="2" fill="#6e7681"/>
+<text x="38" y="470" fill="#7d8590" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">baseline</text>
+<rect x="100" y="462" width="12" height="8" rx="2" fill="#58a6ff"/>
+<text x="118" y="470" fill="#7d8590" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="11">refactor</text>
+</svg>

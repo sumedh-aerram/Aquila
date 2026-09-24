@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 319" role="img" aria-label="fix vs baseline: behavior change caught">
+<rect width="880" height="319" rx="10" fill="#0d1117"/>
+<rect x="0.5" y="0.5" width="879" height="318" rx="10" fill="none" stroke="#30363d"/>
+<path d="M0.5 36 H879.5" stroke="#30363d"/>
+<rect x="1" y="1" width="878" height="35" rx="9" fill="#161b22"/>
+<rect x="1" y="26" width="878" height="10" fill="#161b22"/>
+<circle cx="20" cy="18.0" r="5" fill="#30363d"/>
+<circle cx="36" cy="18.0" r="5" fill="#30363d"/>
+<circle cx="52" cy="18.0" r="5" fill="#30363d"/>
+<text x="440.0" y="22.0" text-anchor="middle" fill="#7d8590" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">fix vs baseline: behavior change caught</text>
+<text x="20" y="64" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#3fb950">$ </tspan><tspan fill="#e6edf3">aquila experiment -service api -workload workload.json -n 20 \</tspan></text>
+<text x="20" y="83" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    -base </tspan><tspan fill="#7d8590">http://127.0.0.1:29898</tspan><tspan fill="#e6edf3">  -patch </tspan><tspan fill="#7d8590">http://127.0.0.1:29900</tspan></text>
+<text x="20" y="102" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">experiment  overall=</tspan><tspan fill="#d29922">differ</tspan><tspan fill="#e6edf3">  steps=6  skipped=0</tspan></text>
+<text x="20" y="121" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">  behavior       </tspan><tspan fill="#d29922">differ</tspan></text>
+<text x="20" y="140" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    GET  /reports/daily?...       500/404  </tspan><tspan fill="#d29922">differ  status</tspan></text>
+<text x="20" y="159" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    GET  /reports/weekly?...      500/404  </tspan><tspan fill="#d29922">differ  status</tspan></text>
+<text x="20" y="178" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    GET  /score?...               500/404  </tspan><tspan fill="#d29922">differ  status</tspan></text>
+<text x="20" y="197" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    GET  /stats/average?...       500/404  </tspan><tspan fill="#d29922">differ  status</tspan></text>
+<text x="20" y="216" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    GET  /stats/distribution?...  500/404  </tspan><tspan fill="#d29922">differ  status</tspan></text>
+<text x="20" y="235" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">    GET  /summary?...             </tspan><tspan fill="#f85149">500/500</tspan><tspan fill="#e6edf3">  match</tspan><tspan fill="#f85149">   &lt;- still failing after the fix</tspan></text>
+<text x="20" y="254" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">  concurrency    </tspan><tspan fill="#d29922">differ</tspan><tspan fill="#7d8590">  baseline_errors=48/112  patch_errors=8/112</tspan></text>
+<text x="20" y="273" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">coverage   impacted=6  </tspan><tspan fill="#3fb950">exercised=6</tspan><tspan fill="#e6edf3">  missed=0</tspan></text>
+<text x="20" y="292" font-family="SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace" font-size="13" xml:space="preserve"><tspan fill="#e6edf3">validated  </tspan><tspan fill="#f85149">false</tspan></text>
+</svg>
