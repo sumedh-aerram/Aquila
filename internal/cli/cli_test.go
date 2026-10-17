@@ -291,6 +291,7 @@ func TestRunEnvPrintsPrepared(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(shop, "internal", "a.go"), []byte("package p\nconst X = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runGitInit(t, shop)
 	raw := "--- a/internal/a.go\n+++ b/internal/a.go\n@@ -1,2 +1,2 @@\n package p\n-const X = 1\n+const X = 2\n"
 	var out strings.Builder
 	err := RunEnv(t.Context(), []string{"-shop", shop, "-out", t.TempDir()}, strings.NewReader(raw), &out)
@@ -756,6 +757,7 @@ func TestRunExperimentPrintsBlockers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	shop, raw := revisionShop(t)
 	var stopped atomic.Bool
 	preparePair = func(context.Context, pair.PrepareOpts) (pair.Env, error) {
 		return pair.Env{
@@ -771,8 +773,8 @@ func TestRunExperimentPrintsBlockers(t *testing.T) {
 	}
 	var out strings.Builder
 	err = RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
-	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+		"-api", api.URL, "-fixture", "-n", "1", "-dir", shop, "-shop", shop,
+	}, strings.NewReader(raw), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -805,6 +807,7 @@ func TestRunExperimentLocalEnvTearsDownOnStartFailure(t *testing.T) {
 		Files:  []string{"a.go"},
 		Direct: []impact.Finding{{Name: "F"}},
 	})
+	shop, raw := revisionShop(t)
 	var stopped atomic.Bool
 	preparePair = func(context.Context, pair.PrepareOpts) (pair.Env, error) {
 		return pair.Env{ID: "aaaaaaaaaaaa"}, nil
@@ -817,8 +820,8 @@ func TestRunExperimentLocalEnvTearsDownOnStartFailure(t *testing.T) {
 		return nil
 	}
 	err := RunExperiment(t.Context(), []string{
-		"-api", api.URL, "-fixture", "-n", "1", "-dir", shopSnapshotDir(t),
-	}, strings.NewReader("diff --git a/x b/x\n"), io.Discard)
+		"-api", api.URL, "-fixture", "-n", "1", "-dir", shop, "-shop", shop,
+	}, strings.NewReader(raw), io.Discard)
 	if err == nil {
 		t.Fatal("expected start failure")
 	}
@@ -1231,7 +1234,7 @@ func experimentAPI(t *testing.T, rep impact.Report) (*httptest.Server, *runs.Mem
 	return srv, store
 }
 
-func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
+func impactAPI(t *testing.T, rep impact.Report, hooks ...func(*http.Request)) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1244,6 +1247,9 @@ func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
 		case r.URL.Path == "/v1/locate":
 			writeTestJSON(w, locate.Snapshot{})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/impact":
+			for _, hook := range hooks {
+				hook(r)
+			}
 			writeTestJSON(w, rep)
 		default:
 			http.NotFound(w, r)
@@ -1311,5 +1317,185 @@ func TestWriteDecisionNoTrailingWhitespace(t *testing.T) {
 		if strings.TrimRight(line, " \t") != line {
 			t.Fatalf("trailing whitespace: %q", line)
 		}
+	}
+}
+
+func revisionShop(t *testing.T) (string, string) {
+	t.Helper()
+	dir := shopSnapshotDir(t)
+	for name, raw := range map[string]string{"Dockerfile": "FROM alpine\n", "a.go": "package p\nfunc F() int { return 1 }\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitInit(t, dir)
+	return dir, "--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,2 @@\n package p\n-func F() int { return 1 }\n+func F() int { return 2 }\n"
+}
+
+func TestRunExperimentCapturesRevisionsBeforeStart(t *testing.T) {
+	runBuiltExperimentTest(t, false, false)
+}
+
+func TestRunExperimentDirtyWorktreeValidates(t *testing.T) {
+	runBuiltExperimentTest(t, true, false)
+}
+
+func runBuiltExperimentTest(t *testing.T, dirty, mutate bool) {
+	t.Helper()
+	pairHookMu.Lock()
+	defer pairHookMu.Unlock()
+	origP, origU, origD := preparePair, startPair, stopPair
+	t.Cleanup(func() { preparePair, startPair, stopPair = origP, origU, origD })
+	shop, raw := revisionShop(t)
+	if dirty {
+		if err := os.WriteFile(filepath.Join(shop, "a.go"), []byte("package p\nfunc F() int { return 2 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var analyzed []byte
+	mutations := make(chan error, 1)
+	api := impactAPI(t, impact.Report{
+		Files: []string{"internal/payment/handler.go"},
+		Direct: []impact.Finding{{
+			Name:     "F",
+			File:     "internal/payment/handler.go",
+			SourceID: "f",
+			Reason:   "changed_lines",
+		}},
+		Runtime: []impact.Finding{{
+			Name:  "F",
+			Route: "GET /healthz",
+		}},
+	}, func(r *http.Request) {
+		if !mutate {
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			analyzed = body
+			err = os.WriteFile(filepath.Join(shop, "a.go"), []byte("package p\nfunc F() int { return 3 }\n"), 0o644)
+		}
+		mutations <- err
+	})
+	serve := func(w http.ResponseWriter, r *http.Request) { writeReplayJSON(w, map[string]any{"status": "ok"}) }
+	base := httptest.NewServer(http.HandlerFunc(serve))
+	defer base.Close()
+	patch := httptest.NewServer(http.HandlerFunc(serve))
+	defer patch.Close()
+	prepared, started := false, false
+	var capturedTree string
+	preparePair = func(_ context.Context, opts pair.PrepareOpts) (pair.Env, error) {
+		if opts.Baseline.Tree == "" || opts.Patch.Tree == "" || opts.Baseline.Tree == opts.Patch.Tree {
+			t.Fatalf("revisions not captured: %+v", opts)
+		}
+		if mutate {
+			if err := <-mutations; err != nil {
+				t.Fatal(err)
+			}
+			diff, err := opts.Repo.DiffTrees(t.Context(), opts.Baseline.Commit, opts.Patch.Commit)
+			if err != nil || !bytes.Equal(diff, analyzed) || !bytes.Contains(diff, []byte("return 2")) || bytes.Contains(diff, []byte("return 3")) {
+				t.Fatalf("analyzed=%s built=%s error=%v", analyzed, diff, err)
+			}
+			dst := filepath.Join(t.TempDir(), "built")
+			if err := opts.Repo.Materialize(t.Context(), opts.Patch.Tree, dst); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(filepath.Join(dst, "a.go"))
+			if err != nil || !bytes.Contains(body, []byte("return 2")) || bytes.Contains(body, []byte("return 3")) {
+				t.Fatalf("built content=%s error=%v", body, err)
+			}
+		}
+		capturedTree = opts.Patch.Tree
+		prepared = true
+		return pair.Env{ID: "aaaaaaaaaaaa", Baseline: pair.Side{Gateway: base.URL}, Patch: pair.Side{Gateway: patch.URL}}, nil
+	}
+	startPair = func(context.Context, pair.Env) error {
+		if !prepared {
+			t.Fatal("start before revisions")
+		}
+		started = true
+		return nil
+	}
+	stopPair = func(context.Context, pair.Env) error { return nil }
+	evidencePath := filepath.Join(t.TempDir(), "evidence.json")
+	args := []string{"-api", api.URL, "-fixture", "-n", "20", "-dir", shop, "-shop", shop, "-out", evidencePath}
+	if mutate {
+		otherDir, _ := revisionShop(t)
+		if err := os.WriteFile(filepath.Join(otherDir, "a.go"), []byte("package p\nfunc F() int { return 99 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, "-dir", otherDir)
+	}
+	if dirty {
+		raw = ""
+	}
+	var out strings.Builder
+	if err := RunExperiment(t.Context(), args, strings.NewReader(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := evidence.Decode(bytes.NewReader(encoded))
+	if err != nil || artifact.PatchRev.Tree != capturedTree {
+		t.Fatalf("recorded patch=%+v error=%v", artifact.PatchRev, err)
+	}
+	if !started || !strings.Contains(out.String(), "source=built") || !strings.Contains(out.String(), "validated  true") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
+func TestResolveDiffUntrackedRealContent(t *testing.T) {
+	t.Parallel()
+	dir, _ := revisionShop(t)
+	if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package p\nfunc Untracked() { println(42) }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, origin, err := resolveDiff(t.Context(), strings.NewReader(""), "", dir)
+	if err != nil || origin != "worktree" || !bytes.Contains(raw, []byte("func Untracked() { println(42) }")) {
+		t.Fatalf("%s %s %v", origin, raw, err)
+	}
+}
+
+func TestRunExperimentAnalyzesBuiltSnapshot(t *testing.T) {
+	runBuiltExperimentTest(t, true, true)
+}
+
+func TestSymlinkInvestigationAndURLExperiment(t *testing.T) {
+	t.Parallel()
+	dir, _ := revisionShop(t)
+	if err := os.Symlink("a.go", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	api := impactAPI(t, impact.Report{Files: []string{"link"}})
+	var out strings.Builder
+	if err := RunImpact(t.Context(), []string{"-api", api.URL, "-dir", dir}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "files=1") {
+		t.Fatalf("impact: %s", out.String())
+	}
+	serve := func(w http.ResponseWriter, r *http.Request) { writeReplayJSON(w, map[string]any{"status": "ok"}) }
+	base := httptest.NewServer(http.HandlerFunc(serve))
+	defer base.Close()
+	patch := httptest.NewServer(http.HandlerFunc(serve))
+	defer patch.Close()
+	out.Reset()
+	if err := RunExperiment(t.Context(), []string{
+		"-api", api.URL,
+		"-dir", dir,
+		"-base", base.URL,
+		"-patch", patch.URL,
+		"-fixture", "-n", "1",
+	}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "unverified_revision  baseline") || !strings.Contains(out.String(), "unverified_revision  patch") || !strings.Contains(out.String(), "validated  false") {
+		t.Fatalf("URL: %s", out.String())
+	}
+	_, err := captureBuild(t.Context(), strings.NewReader(""), "", dir)
+	if err == nil || !strings.Contains(err.Error(), "unsupported entry link") {
+		t.Fatalf("build error=%v", err)
 	}
 }

@@ -178,11 +178,14 @@ func TestPrepareReplaceTinyShop(t *testing.T) {
 	}
 	parent := t.TempDir()
 	raw := []byte("--- a/internal/a.go\n+++ b/internal/a.go\n@@ -1,2 +1,2 @@\n package p\n-const X = 1\n+const X = 2\n")
-	first, err := Prepare(t.Context(), PrepareOpts{ShopDir: shop, Parent: parent, Diff: raw})
+	initRepo(t, shop)
+	opts := treeOpts(t, shop, raw, parent)
+	first, err := Prepare(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Prepare(t.Context(), PrepareOpts{ShopDir: shop, Parent: parent, Diff: raw, Replace: true})
+	opts.Replace = true
+	second, err := Prepare(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}

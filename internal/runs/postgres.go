@@ -10,8 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
-	"github.com/sumedhaerram/aquila/internal/replay"
-	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 // Postgres stores experiment runs in aquila.runs.
@@ -42,8 +40,7 @@ WHERE id = $1
 
 const listSQL = `
 SELECT id, recorded_at, baseline_sha, dirty, workload_digest, artifact_digest, overall, validated,
-       COALESCE(artifact->>'service', ''), COALESCE(artifact->>'schema', ''),
-       COALESCE(artifact->'blockers', '[]'::jsonb)
+       COALESCE(artifact->>'service', ''), artifact
 FROM aquila.runs
 WHERE ($2 = '' OR COALESCE(artifact->>'service', '') = $2)
 ORDER BY recorded_at DESC, id DESC
@@ -132,27 +129,23 @@ func (p *Postgres) List(ctx context.Context, limit int, service string) ([]Recor
 	out := make([]Record, 0, limit)
 	for rows.Next() {
 		var rec Record
-		var schema string
-		var blockers []byte
+		var raw []byte
 		if err := rows.Scan(
 			&rec.ID, &rec.Recorded, &rec.BaselineSHA, &rec.Dirty,
 			&rec.WorkloadDigest, &rec.ArtifactDigest, &rec.Overall, &rec.Validated,
-			&rec.Service, &schema, &blockers,
+			&rec.Service, &raw,
 		); err != nil {
 			return nil, fmt.Errorf("list runs: %w", err)
 		}
-		rec.Validated = rec.Validated && schema == evidence.SchemaV2
-		switch schema {
-		case evidence.SchemaV1:
-			rec.Blockers = validate.Legacy().Blockers
-		case evidence.SchemaV2:
-			if err := json.Unmarshal(blockers, &rec.Blockers); err != nil {
-				return nil, fmt.Errorf("list runs: blockers: %w", err)
-			}
+		var a evidence.Artifact
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, fmt.Errorf("list runs: %w", err)
 		}
-		if rec.Validated && rec.Overall != replay.VerdictMatch {
-			return nil, fmt.Errorf("runs: stored validated claim")
+		if err := evidence.Verify(a); err != nil {
+			return nil, err
 		}
+		d := a.Decision()
+		rec.Validated, rec.Blockers = d.Validated, d.Blockers
 		rec.Recorded = rec.Recorded.UTC()
 		out = append(out, rec)
 	}

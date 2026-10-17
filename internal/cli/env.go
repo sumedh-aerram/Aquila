@@ -28,15 +28,15 @@ func RunEnv(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 		return fmt.Errorf("cli: env: %w", err)
 	}
 
-	raw, err := slurpDiff(stdin, path)
+	snap, err := captureBuild(ctx, stdin, path, *shop)
 	if err != nil {
 		return fmt.Errorf("cli: env: %w", err)
 	}
-
 	env, err := pair.Prepare(ctx, pair.PrepareOpts{
-		ShopDir:   *shop,
+		Repo:      snap.Repo,
+		Baseline:  snap.Baseline,
+		Patch:     snap.Patch,
 		Parent:    *outDir,
-		Diff:      raw,
 		BasePort:  *basePort,
 		PatchPort: *patchPort,
 	})
@@ -49,13 +49,7 @@ func RunEnv(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 
 func writeEnv(w io.Writer, env pair.Env) {
 	writef(w, "env       id=%s  status=%s\n", env.ID, env.Status)
-	if env.BaselineSHA != "" {
-		dirty := "clean"
-		if env.DirtyShop {
-			dirty = "dirty"
-		}
-		writef(w, "git       %s  shop=%s\n", env.BaselineSHA, dirty)
-	}
+	writeRevisions(w, env.BaselineRev, env.PatchRev)
 	writef(w, "baseline  %s  %s  digest=%s\n", env.Baseline.Gateway, env.Baseline.Dir, shortDigest(env.BaselineDigest))
 	writef(w, "patch     %s  %s  digest=%s\n", env.Patch.Gateway, env.Patch.Dir, shortDigest(env.PatchDigest))
 	writef(w, "compose   %s\n", env.ComposeFile)

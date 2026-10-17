@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -18,8 +19,14 @@ func TestPostgresSurvivesReconnect(t *testing.T) {
 		MaxConns:       2,
 		ConnectTimeout: 2 * time.Second,
 	}
+	if dsn := os.Getenv("AQUILA_TEST_POSTGRES_URL"); dsn != "" {
+		cfg.URL = dsn
+	}
 	db, err := storage.Open(ctx, cfg)
 	if err != nil {
+		if os.Getenv("AQUILA_TEST_POSTGRES_URL") != "" {
+			t.Fatal(err)
+		}
 		t.Skip(err.Error())
 	}
 	st := NewPostgres(db.Pool())

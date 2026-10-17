@@ -12,6 +12,7 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/config"
 	"github.com/sumedhaerram/aquila/internal/evidence"
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -148,26 +149,42 @@ func TestListRunsByService(t *testing.T) {
 	store := runs.NewMemory()
 	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Runs: store})
 	ledger := evidence.Build(evidence.Input{
-		Now:         time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
-		BaselineSHA: "deadbeef",
-		Service:     "ledger",
-		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
-		Impact:      impact.Report{Files: []string{"a.go"}},
-		Plan:        plan.DAG{},
-		Result:      plan.Evidence{Overall: replay.VerdictDiffer, Notes: []string{"not validated"}},
+		Now:      time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		BaselineRev: gitrev.Revision{
+			Commit: "deadbeef",
+			Tree:   "base",
+			Source: gitrev.SourceDeclared,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceDeclared,
+		},
+		Service:  "ledger",
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:   impact.Report{Files: []string{"a.go"}},
+		Plan:     plan.DAG{},
+		Result:   plan.Evidence{Overall: replay.VerdictDiffer, Notes: []string{"not validated"}},
 	})
 	shop := evidence.Build(evidence.Input{
-		Now:         time.Date(2026, 9, 22, 21, 0, 0, 0, time.UTC),
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
-		BaselineSHA: "deadbeef",
-		Service:     "shop",
-		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
-		Impact:      impact.Report{Files: []string{"a.go"}},
-		Plan:        plan.DAG{},
-		Result:      plan.Evidence{Overall: replay.VerdictMatch, Notes: []string{"not validated"}},
+		Now:      time.Date(2026, 9, 22, 21, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		BaselineRev: gitrev.Revision{
+			Commit: "deadbeef",
+			Tree:   "base",
+			Source: gitrev.SourceDeclared,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceDeclared,
+		},
+		Service:  "shop",
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:   impact.Report{Files: []string{"a.go"}},
+		Plan:     plan.DAG{},
+		Result:   plan.Evidence{Overall: replay.VerdictMatch, Notes: []string{"not validated"}},
 	})
 	for _, a := range []evidence.Artifact{ledger, shop} {
 		raw, err := evidence.Marshal(a)
@@ -197,26 +214,40 @@ func TestListRunsByService(t *testing.T) {
 func runArtifact(t *testing.T, overall string) evidence.Artifact {
 	t.Helper()
 	return evidence.Build(evidence.Input{
-		Now:         time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
-		BaselineSHA: "deadbeef",
-		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
-		Impact:      impact.Report{Files: []string{"a.go"}},
-		Plan:        plan.DAG{},
-		Result:      plan.Evidence{Overall: overall, Notes: []string{"not validated"}},
+		Now:      time.Date(2026, 9, 22, 20, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		BaselineRev: gitrev.Revision{
+			Commit: "deadbeef",
+			Tree:   "base",
+			Source: gitrev.SourceDeclared,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceDeclared,
+		},
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Impact:   impact.Report{Files: []string{"a.go"}},
+		Plan:     plan.DAG{},
+		Result:   plan.Evidence{Overall: overall, Notes: []string{"not validated"}},
 	})
 }
 
 func TestCreateRunRejectsLegacySchema(t *testing.T) {
-	raw, err := os.ReadFile("../evidence/testdata/v1_shop_validated.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Runs: runs.NewMemory()})
-	rec := httptest.NewRecorder()
-	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(raw)))
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "legacy schema") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	t.Parallel()
+	for _, fixture := range []string{"v1_shop_validated.json", "v2_shop_m1_validated.json"} {
+		t.Run(fixture, func(t *testing.T) {
+			t.Parallel()
+			raw, err := os.ReadFile("../evidence/testdata/" + fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Runs: runs.NewMemory()})
+			rec := httptest.NewRecorder()
+			srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(raw)))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "legacy schema") {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

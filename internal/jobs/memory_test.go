@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -351,12 +352,19 @@ func TestDeadlineFailsReady(t *testing.T) {
 	}
 }
 
-func TestJobEarnsValidated(t *testing.T) {
+func TestJobValidationRequiresBuiltRevisions(t *testing.T) {
 	t.Parallel()
 	st := NewMemory()
 	opts := sampleOpts(t)
-	opts.BaselineSHA = "abc123"
-	opts.Dirty = false
+	opts.BaselineRev = gitrev.Revision{
+		Commit: "abc123",
+		Tree:   "base",
+		Source: gitrev.SourceBuilt,
+	}
+	opts.PatchRev = gitrev.Revision{
+		Tree:   "patch",
+		Source: gitrev.SourceBuilt,
+	}
 	opts.Changes = impact.Changes{Bound: []string{"charge"}}
 	opts.Impacted = []string{"GET /healthz"}
 	opts.Plan.Steps = append(opts.Plan.Steps, plan.Step{ID: "concurrency", Kind: plan.KindConcurrency, Required: true, DependsOn: []string{"latency"}})
@@ -396,8 +404,16 @@ func TestJobEarnsValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusComplete || !got.Validated {
+	if got.Status != StatusComplete || got.Validated || len(got.Blockers) != 2 || got.Blockers[0].Code != validate.CodeUnverifiedRevision || got.Blockers[1].Code != validate.CodeUnverifiedRevision {
 		t.Fatalf("%+v", got)
+	}
+	if got.BaselineRev.Source != gitrev.SourceDeclared || got.PatchRev.Source != gitrev.SourceDeclared {
+		t.Fatalf("worker jobs must be declared: %+v", got)
+	}
+	got.BaselineRev.Source = gitrev.SourceBuilt
+	got.PatchRev.Source = gitrev.SourceBuilt
+	if d := jobDecision(got); !d.Validated {
+		t.Fatalf("built control did not validate: %+v", d)
 	}
 }
 
@@ -405,8 +421,15 @@ func TestSmokeJobCannotValidate(t *testing.T) {
 	t.Parallel()
 	st := NewMemory()
 	opts := sampleOpts(t)
-	opts.BaselineSHA = "abc123"
-	opts.Dirty = false
+	opts.BaselineRev = gitrev.Revision{
+		Commit: "abc123",
+		Tree:   "base",
+		Source: gitrev.SourceBuilt,
+	}
+	opts.PatchRev = gitrev.Revision{
+		Tree:   "patch",
+		Source: gitrev.SourceBuilt,
+	}
 	opts.Plan = plan.WithLatencyN(opts.Plan, 1)
 	job, err := st.Create(t.Context(), opts)
 	if err != nil {
@@ -510,7 +533,7 @@ func TestJobLegacyPayloadWithoutChangesNotValidated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Validated || len(got.Blockers) != 1 || got.Blockers[0].Code != validate.CodeNoFunctionBinding {
+	if got.Validated || len(got.Blockers) != 3 || got.Blockers[2].Code != validate.CodeNoFunctionBinding || got.Blockers[0].Code != validate.CodeUnverifiedRevision || got.Blockers[1].Code != validate.CodeUnverifiedRevision {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -539,5 +562,26 @@ func TestJobBlockers(t *testing.T) {
 	}
 	if canceled.Validated || len(canceled.Blockers) != 1 || canceled.Blockers[0].Subject != "job:canceled" {
 		t.Fatalf("%+v", canceled)
+	}
+}
+
+func TestJobImpactSourceServerSet(t *testing.T) {
+	t.Parallel()
+	opts := sampleOpts(t)
+	raw, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append([]byte(`{"impact_source":"server",`), raw[1:]...)
+	var decoded CreateOpts
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	job, err := NewMemory().Create(t.Context(), decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ImpactSource != "client" {
+		t.Fatalf("impact_source=%q", job.ImpactSource)
 	}
 }

@@ -11,23 +11,23 @@ import (
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/cas"
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/jobs"
 	"github.com/sumedhaerram/aquila/internal/plan"
 )
 
-const keyVersion = 2
+const keyVersion = 3
 
 // Key identifies a replay action. It does not include wall-clock time.
 type Key struct {
-	V           int    `json:"v"`
-	JobID       string `json:"job_id"`
-	Kind        string `json:"kind"`
-	Baseline    string `json:"baseline"`
-	Patch       string `json:"patch"`
-	BaselineSHA string `json:"baseline_sha"`
-	N           int    `json:"n"`
-	Workload    string `json:"workload"`
-	HealthPath  string `json:"health_path,omitempty"`
+	V            int    `json:"v"`
+	Kind         string `json:"kind"`
+	BaselineTree string `json:"baseline_tree"`
+	PatchTree    string `json:"patch_tree"`
+	Scope        string `json:"scope"`
+	N            int    `json:"n"`
+	Workload     string `json:"workload"`
+	HealthPath   string `json:"health_path,omitempty"`
 }
 
 // Digest is the SHA-256 of the canonical key.
@@ -44,17 +44,20 @@ func FromLease(lease jobs.Lease) Key {
 	if n < 1 {
 		n = 1
 	}
-	return Key{
-		V:           keyVersion,
-		JobID:       lease.Job.ID,
-		Kind:        lease.Task.Kind,
-		Baseline:    lease.Job.Baseline,
-		Patch:       lease.Job.Patch,
-		BaselineSHA: lease.Job.BaselineSHA,
-		N:           n,
-		Workload:    string(w),
-		HealthPath:  lease.Job.Plan.HealthPath,
+	key := Key{
+		V:          keyVersion,
+		Scope:      "job:" + lease.Job.ID,
+		Kind:       lease.Task.Kind,
+		N:          n,
+		Workload:   string(w),
+		HealthPath: lease.Job.Plan.HealthPath,
 	}
+	if lease.Job.BaselineRev.Source == gitrev.SourceBuilt && lease.Job.PatchRev.Source == gitrev.SourceBuilt && lease.Job.BaselineRev.Tree != "" && lease.Job.PatchRev.Tree != "" {
+		key.Scope = "trees"
+		key.BaselineTree = lease.Job.BaselineRev.Tree
+		key.PatchTree = lease.Job.PatchRev.Tree
+	}
+	return key
 }
 
 // Cache maps action digests to CAS object digests.

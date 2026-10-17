@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -58,8 +59,8 @@ type Decision struct {
 
 // Input contains executed evidence and the classified change.
 type Input struct {
-	Dirty       bool
-	BaselineSHA string
+	BaselineRev gitrev.Revision
+	PatchRev    gitrev.Revision
 	Baseline    string
 	Patch       string
 	Plan        plan.DAG
@@ -75,11 +76,19 @@ func Legacy() Decision { return Decision{Blockers: []Blocker{{Code: CodeLegacySc
 // Decide evaluates every validation requirement in deterministic policy order.
 func Decide(in Input) Decision {
 	blockers := []Blocker{}
-	if in.Dirty {
+	if in.BaselineRev.Dirty {
 		blockers = append(blockers, Blocker{Code: CodeDirtyBaseline})
 	}
-	if strings.TrimSpace(in.BaselineSHA) == "" {
-		blockers = append(blockers, Blocker{Code: CodeUnverifiedRevision, Subject: "baseline"})
+	for _, side := range []struct {
+		name string
+		rev  gitrev.Revision
+	}{{"baseline", in.BaselineRev}, {"patch", in.PatchRev}} {
+		if side.rev.Tree == "" || side.rev.Source != gitrev.SourceBuilt {
+			blockers = append(blockers, Blocker{Code: CodeUnverifiedRevision, Subject: side.name})
+		}
+	}
+	if in.BaselineRev.Tree != "" && in.BaselineRev.Tree == in.PatchRev.Tree {
+		blockers = append(blockers, Blocker{Code: CodeSameTarget, Subject: in.BaselineRev.Tree})
 	}
 	blockers = append(blockers, targetBlockers(in)...)
 	if strings.ToLower(strings.TrimSpace(in.Result.Overall)) != replay.VerdictMatch {

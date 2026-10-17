@@ -24,7 +24,7 @@ GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 SHOP_GW     := http://127.0.0.1:18080
 
-.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke terraform-eval executor executor-test
+.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke terraform-eval executor executor-test pair-integration
 
 help:
 	@printf '%s\n' \
@@ -50,6 +50,7 @@ help:
 		'  make cli-smoke   aquila status, observe, ask, impact, patch' \
 		'  make impact-smoke  Pipe a D1-style payment diff through aquila impact' \
 		'  make impact-eval   Score labeled D1–D6 diffs (function recall)' \
+		'  make pair-integration Build and probe a tree-based shop pair (Docker)' \
 		'  make env-smoke     Prepare an isolated baseline/patch pair from a D1 diff' \
 		'  make replay-eval   Replay, latency, and fault tests (no fake pass)' \
 		'  make plan-eval     Experiment plan, execute, and evidence-report tests (no fake pass)' \
@@ -230,3 +231,6 @@ version:
 $(GOBIN)/golangci-lint:
 	@mkdir -p '$(GOBIN)'
 	GOBIN='$(GOBIN)' $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+
+pair-integration:
+	AQUILA_TEST_DOCKER=1 $(GO) test -race -count=1 -run Integration ./internal/pair

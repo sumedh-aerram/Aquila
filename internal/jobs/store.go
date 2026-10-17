@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/netguard"
 	"github.com/sumedhaerram/aquila/internal/plan"
@@ -92,32 +93,35 @@ type Task struct {
 // Job records an experiment DAG, classified changes and task results.
 // Validated and Blockers reflect the shared validation policy after completion.
 type Job struct {
-	ID          string             `json:"id"`
-	Created     time.Time          `json:"created_at"`
-	Status      string             `json:"status"`
-	Service     string             `json:"service,omitempty"`
-	Baseline    string             `json:"baseline"`
-	Patch       string             `json:"patch"`
-	BaselineSHA string             `json:"baseline_sha,omitempty"`
-	Dirty       bool               `json:"dirty,omitempty"`
-	Deadline    time.Time          `json:"deadline,omitempty"`
-	Canceled    bool               `json:"canceled,omitempty"`
-	Impacted    []string           `json:"impacted,omitempty"`
-	Changes     impact.Changes     `json:"changes,omitzero"`
-	Workload    []Step             `json:"workload"`
-	Plan        plan.DAG           `json:"plan"`
-	Tasks       []Task             `json:"tasks"`
-	Blockers    []validate.Blocker `json:"blockers,omitempty"`
-	Validated   bool               `json:"validated"`
+	BaselineRev  gitrev.Revision    `json:"baseline_rev,omitzero"`
+	PatchRev     gitrev.Revision    `json:"patch_rev,omitzero"`
+	ImpactSource string             `json:"impact_source"`
+	ID           string             `json:"id"`
+	Created      time.Time          `json:"created_at"`
+	Status       string             `json:"status"`
+	Service      string             `json:"service,omitempty"`
+	Baseline     string             `json:"baseline"`
+	Patch        string             `json:"patch"`
+	BaselineSHA  string             `json:"baseline_sha,omitempty"`
+	Dirty        bool               `json:"dirty,omitempty"`
+	Deadline     time.Time          `json:"deadline,omitempty"`
+	Canceled     bool               `json:"canceled,omitempty"`
+	Impacted     []string           `json:"impacted,omitempty"`
+	Changes      impact.Changes     `json:"changes,omitzero"`
+	Workload     []Step             `json:"workload"`
+	Plan         plan.DAG           `json:"plan"`
+	Tasks        []Task             `json:"tasks"`
+	Blockers     []validate.Blocker `json:"blockers,omitempty"`
+	Validated    bool               `json:"validated"`
 }
 
 // CreateOpts is the input for enqueueing a DAG.
 type CreateOpts struct {
+	BaselineRev gitrev.Revision `json:"baseline_rev,omitzero"`
+	PatchRev    gitrev.Revision `json:"patch_rev,omitzero"`
 	Baseline    string          `json:"baseline"`
 	Patch       string          `json:"patch"`
 	Service     string          `json:"service,omitempty"`
-	BaselineSHA string          `json:"baseline_sha,omitempty"`
-	Dirty       bool            `json:"dirty,omitempty"`
 	Deadline    time.Time       `json:"deadline,omitempty"`
 	Workload    replay.Workload `json:"workload"`
 	Plan        plan.DAG        `json:"plan"`
@@ -126,16 +130,16 @@ type CreateOpts struct {
 }
 
 type createWire struct {
-	Baseline    string         `json:"baseline"`
-	Patch       string         `json:"patch"`
-	Service     string         `json:"service,omitempty"`
-	BaselineSHA string         `json:"baseline_sha,omitempty"`
-	Dirty       bool           `json:"dirty,omitempty"`
-	Deadline    time.Time      `json:"deadline,omitempty"`
-	Workload    workloadWire   `json:"workload"`
-	Plan        plan.DAG       `json:"plan"`
-	Impacted    []string       `json:"impacted,omitempty"`
-	Changes     impact.Changes `json:"changes,omitzero"`
+	BaselineRev gitrev.Revision `json:"baseline_rev,omitzero"`
+	PatchRev    gitrev.Revision `json:"patch_rev,omitzero"`
+	Baseline    string          `json:"baseline"`
+	Patch       string          `json:"patch"`
+	Service     string          `json:"service,omitempty"`
+	Deadline    time.Time       `json:"deadline,omitempty"`
+	Workload    workloadWire    `json:"workload"`
+	Plan        plan.DAG        `json:"plan"`
+	Impacted    []string        `json:"impacted,omitempty"`
+	Changes     impact.Changes  `json:"changes,omitzero"`
 }
 
 type workloadWire struct {
@@ -147,10 +151,10 @@ type workloadWire struct {
 func (o CreateOpts) MarshalJSON() ([]byte, error) {
 	return json.Marshal(createWire{
 		Baseline:    o.Baseline,
+		BaselineRev: o.BaselineRev,
+		PatchRev:    o.PatchRev,
 		Patch:       o.Patch,
 		Service:     o.Service,
-		BaselineSHA: o.BaselineSHA,
-		Dirty:       o.Dirty,
 		Deadline:    o.Deadline,
 		Workload:    workloadWire{Steps: workloadOf(o.Workload)},
 		Plan:        o.Plan,
@@ -167,10 +171,10 @@ func (o *CreateOpts) UnmarshalJSON(raw []byte) error {
 	}
 	*o = CreateOpts{
 		Baseline:    w.Baseline,
+		BaselineRev: w.BaselineRev,
+		PatchRev:    w.PatchRev,
 		Patch:       w.Patch,
 		Service:     w.Service,
-		BaselineSHA: w.BaselineSHA,
-		Dirty:       w.Dirty,
 		Deadline:    w.Deadline,
 		Workload:    replayWorkload(w.Workload.Steps),
 		Plan:        w.Plan,

@@ -45,7 +45,11 @@ type Store interface {
 
 // FromArtifact builds a record from checked evidence. The id is the artifact digest prefix.
 func FromArtifact(a evidence.Artifact) (Record, error) {
-	if err := evidence.Check(a); err != nil {
+	check := evidence.Verify
+	if a.Schema == evidence.SchemaV3 {
+		check = evidence.Check
+	}
+	if err := check(a); err != nil {
 		return Record{}, err
 	}
 	if a.ArtifactDigest == "" {

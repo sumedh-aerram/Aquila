@@ -147,51 +147,61 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	raw, _, err := resolveDiff(ctx, stdin, path, *dir)
+	var snap buildSnapshot
+	var raw []byte
+	analysisDir := *dir
+	snapshotStart := time.Now()
+	if hasBase {
+		raw, _, err = resolveDiff(ctx, stdin, path, *dir)
+	} else {
+		snap, err = captureBuild(ctx, stdin, path, *shop)
+		raw = snap.Diff
+		analysisDir = *shop
+	}
 	if err != nil {
 		return fmt.Errorf("cli: experiment: %w", err)
 	}
-	rep, _, err := analyzeDiff(ctx, *api, *dir, *traces, *service, raw)
+	snapshotDuration := time.Since(snapshotStart)
+	rep, _, err := analyzeDiff(ctx, *api, analysisDir, *traces, *service, raw)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: experiment: %w", err)
 	}
 	dag, err := plan.FromImpact(rep)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: experiment: %w", err)
 	}
 	if *n > 0 {
 		dag = plan.WithLatencyN(dag, *n)
 	} else if *smoke {
 		dag = plan.WithLatencyN(dag, 1)
 	}
-	dag = plan.WithTests(dag, patchModule(ctx, *dir), rep.Files)
+	dag = plan.WithTests(dag, patchModule(ctx, analysisDir), rep.Files)
 	dag = plan.WithHealthPath(dag, *health)
 
-	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, *dir)
+	w, err := resolveWorkload(ctx, *api, *traces, *service, *fixture, *workload, analysisDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: experiment: %w", err)
 	}
 	if len(w.Steps) == 0 {
 		return fmt.Errorf("cli: experiment: empty workload (no GET/HEAD/OPTIONS server routes in the trace window; pass -workload for mutating requests)")
 	}
 
-	sha, dirty, err := gitrev.State(ctx, *dir)
-	if err != nil {
-		return fmt.Errorf("cli: experiment: %w", err)
-	}
+	var baselineRev, patchRev gitrev.Revision
 
 	baseURL, patchURL := *base, *patch
 	if !hasBase {
+		baselineRev, patchRev = snap.Baseline, snap.Patch
 		env, err := preparePair(ctx, pair.PrepareOpts{
-			ShopDir:   *shop,
+			Repo:      snap.Repo,
+			Baseline:  snap.Baseline,
+			Patch:     snap.Patch,
 			Parent:    *pairDir,
-			Diff:      raw,
 			BasePort:  *basePort,
 			PatchPort: *patchPort,
 			Replace:   true,
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("cli: experiment: %w", err)
 		}
 		defer func() {
 			if err := stopPair(context.WithoutCancel(ctx), env); err != nil {
@@ -201,26 +211,35 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 			writef(stdout, "env       stopped\n")
 		}()
 		if err := startPair(ctx, env); err != nil {
-			return err
+			return fmt.Errorf("cli: experiment: %w", err)
 		}
+		baselineRev.Source = gitrev.SourceBuilt
+		patchRev.Source = gitrev.SourceBuilt
 		baseURL = gatewayURL(env.Baseline.Gateway)
 		patchURL = gatewayURL(env.Patch.Gateway)
 		dag = plan.WithLocalEnv(dag)
-		writef(stdout, "env       id=%s  status=up\n", env.ID)
+		writef(stdout, "env       id=%s  status=up snapshot=%s\n", env.ID, snapshotDuration)
 		writef(stdout, "baseline  %s\n", baseURL)
 		writef(stdout, "patch     %s\n", patchURL)
+	} else {
+		var err error
+		baselineRev, patchRev, err = declaredRevisions(ctx, *dir)
+		if err != nil {
+			return fmt.Errorf("cli: experiment: %w", err)
+		}
 	}
+	writeRevisions(stdout, baselineRev, patchRev)
 
 	ev, err := plan.Execute(ctx, dag, baseURL, patchURL, w)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: experiment: %w", err)
 	}
 	art := evidence.Build(evidence.Input{
 		Now:         time.Now().UTC(),
 		Baseline:    baseURL,
 		Patch:       patchURL,
-		BaselineSHA: sha,
-		Dirty:       dirty,
+		BaselineRev: baselineRev,
+		PatchRev:    patchRev,
 		Service:     ingest.ClipService(*service),
 		Workload:    w,
 		Impact:      rep,
@@ -229,16 +248,9 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	})
 	writeEvidence(stdout, ev)
 	writeDecision(stdout, art.Coverage, art.Decision())
-	if sha != "" {
-		state := "clean"
-		if dirty {
-			state = "dirty"
-		}
-		writef(stdout, "git       %s  %s\n", sha, state)
-	}
 	if *outPath != "" {
 		if err := writeEvidenceFile(*outPath, art); err != nil {
-			return err
+			return fmt.Errorf("cli: experiment: %w", err)
 		}
 		writef(stdout, "wrote     %s\n", *outPath)
 	}
