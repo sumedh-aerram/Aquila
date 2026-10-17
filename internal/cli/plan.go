@@ -19,6 +19,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/pair"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 // RunPlan prints the minimum useful experiment DAG for a unified diff.
@@ -174,6 +175,11 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		return fmt.Errorf("cli: experiment: empty workload (no GET/HEAD/OPTIONS server routes in the trace window; pass -workload for mutating requests)")
 	}
 
+	sha, dirty, err := gitrev.State(ctx, *dir)
+	if err != nil {
+		return fmt.Errorf("cli: experiment: %w", err)
+	}
+
 	baseURL, patchURL := *base, *patch
 	if !hasBase {
 		env, err := preparePair(ctx, pair.PrepareOpts{
@@ -209,10 +215,6 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	if err != nil {
 		return err
 	}
-	sha, dirty, err := gitrev.State(ctx, *dir)
-	if err != nil {
-		return fmt.Errorf("cli: experiment: %w", err)
-	}
 	art := evidence.Build(evidence.Input{
 		Now:         time.Now().UTC(),
 		Baseline:    baseURL,
@@ -226,8 +228,7 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		Result:      ev,
 	})
 	writeEvidence(stdout, ev)
-	writeCoverage(stdout, art.Coverage, art.Impact.Direct)
-	writeValidated(stdout, art.Validated)
+	writeDecision(stdout, art.Coverage, art.Decision())
 	if sha != "" {
 		state := "clean"
 		if dirty {
@@ -310,15 +311,7 @@ func deltaNotes(d replay.Delta) string {
 	return "  " + strings.Join(d.Notes, ",")
 }
 
-func writeCoverage(w io.Writer, c *evidence.Coverage, direct int) {
-	if c == nil && direct > 0 {
-		writef(w, "coverage   none: %d changed functions, no observed route runs them; validated needs one (drive traffic or raise -traces)\n", direct)
-		return
-	}
-	if c == nil {
-		writef(w, "coverage   no changed functions to cover\n")
-		return
-	}
+func writeCoverage(w io.Writer, c *evidence.Coverage) {
 	writef(w, "coverage   impacted=%d  exercised=%d  missed=%d\n", len(c.Impacted), len(c.Exercised), len(c.Missed))
 	for _, r := range c.Exercised {
 		writef(w, "  hit      %s\n", r)
@@ -339,9 +332,19 @@ func writeCoverage(w io.Writer, c *evidence.Coverage, direct int) {
 	}
 }
 
-func writeValidated(w io.Writer, ok bool) {
-	writef(w, "validated  %t\n", ok)
-	if ok {
+func writeDecision(w io.Writer, c *evidence.Coverage, d validate.Decision) {
+	if c != nil {
+		writeCoverage(w, c)
+	}
+	writef(w, "validated  %t\n", d.Validated)
+	for _, b := range d.Blockers {
+		if b.Subject == "" {
+			writef(w, "blocker  %s\n", b.Code)
+		} else {
+			writef(w, "blocker  %s  %s\n", b.Code, b.Subject)
+		}
+	}
+	if d.Validated {
 		writef(w, "required experiments ran on a clean recorded revision. match is not a ship decision.\n")
 		return
 	}

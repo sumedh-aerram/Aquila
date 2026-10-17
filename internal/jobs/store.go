@@ -8,12 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/netguard"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 const (
+	maxChanges     = 500
+	maxChangeBytes = 512
+
 	StatusPending  = "pending"
 	StatusRunning  = "running"
 	StatusComplete = "complete"
@@ -84,24 +89,26 @@ type Task struct {
 	Err        string          `json:"error,omitempty"`
 }
 
-// Job is one experiment DAG. Validated is earned after required tasks succeed.
+// Job records an experiment DAG, classified changes and task results.
+// Validated and Blockers reflect the shared validation policy after completion.
 type Job struct {
-	ID          string    `json:"id"`
-	Created     time.Time `json:"created_at"`
-	Status      string    `json:"status"`
-	Service     string    `json:"service,omitempty"`
-	Baseline    string    `json:"baseline"`
-	Patch       string    `json:"patch"`
-	BaselineSHA string    `json:"baseline_sha,omitempty"`
-	Dirty       bool      `json:"dirty,omitempty"`
-	Deadline    time.Time `json:"deadline,omitempty"`
-	Canceled    bool      `json:"canceled,omitempty"`
-	Impacted    []string  `json:"impacted,omitempty"`
-	Direct      int       `json:"direct,omitempty"`
-	Workload    []Step    `json:"workload"`
-	Plan        plan.DAG  `json:"plan"`
-	Tasks       []Task    `json:"tasks"`
-	Validated   bool      `json:"validated"`
+	ID          string             `json:"id"`
+	Created     time.Time          `json:"created_at"`
+	Status      string             `json:"status"`
+	Service     string             `json:"service,omitempty"`
+	Baseline    string             `json:"baseline"`
+	Patch       string             `json:"patch"`
+	BaselineSHA string             `json:"baseline_sha,omitempty"`
+	Dirty       bool               `json:"dirty,omitempty"`
+	Deadline    time.Time          `json:"deadline,omitempty"`
+	Canceled    bool               `json:"canceled,omitempty"`
+	Impacted    []string           `json:"impacted,omitempty"`
+	Changes     impact.Changes     `json:"changes,omitzero"`
+	Workload    []Step             `json:"workload"`
+	Plan        plan.DAG           `json:"plan"`
+	Tasks       []Task             `json:"tasks"`
+	Blockers    []validate.Blocker `json:"blockers,omitempty"`
+	Validated   bool               `json:"validated"`
 }
 
 // CreateOpts is the input for enqueueing a DAG.
@@ -115,20 +122,20 @@ type CreateOpts struct {
 	Workload    replay.Workload `json:"workload"`
 	Plan        plan.DAG        `json:"plan"`
 	Impacted    []string        `json:"impacted,omitempty"`
-	Direct      int             `json:"direct,omitempty"`
+	Changes     impact.Changes  `json:"changes,omitzero"`
 }
 
 type createWire struct {
-	Baseline    string       `json:"baseline"`
-	Patch       string       `json:"patch"`
-	Service     string       `json:"service,omitempty"`
-	BaselineSHA string       `json:"baseline_sha,omitempty"`
-	Dirty       bool         `json:"dirty,omitempty"`
-	Deadline    time.Time    `json:"deadline,omitempty"`
-	Workload    workloadWire `json:"workload"`
-	Plan        plan.DAG     `json:"plan"`
-	Impacted    []string     `json:"impacted,omitempty"`
-	Direct      int          `json:"direct,omitempty"`
+	Baseline    string         `json:"baseline"`
+	Patch       string         `json:"patch"`
+	Service     string         `json:"service,omitempty"`
+	BaselineSHA string         `json:"baseline_sha,omitempty"`
+	Dirty       bool           `json:"dirty,omitempty"`
+	Deadline    time.Time      `json:"deadline,omitempty"`
+	Workload    workloadWire   `json:"workload"`
+	Plan        plan.DAG       `json:"plan"`
+	Impacted    []string       `json:"impacted,omitempty"`
+	Changes     impact.Changes `json:"changes,omitzero"`
 }
 
 type workloadWire struct {
@@ -148,7 +155,7 @@ func (o CreateOpts) MarshalJSON() ([]byte, error) {
 		Workload:    workloadWire{Steps: workloadOf(o.Workload)},
 		Plan:        o.Plan,
 		Impacted:    o.Impacted,
-		Direct:      o.Direct,
+		Changes:     o.Changes,
 	})
 }
 
@@ -168,7 +175,7 @@ func (o *CreateOpts) UnmarshalJSON(raw []byte) error {
 		Workload:    replayWorkload(w.Workload.Steps),
 		Plan:        w.Plan,
 		Impacted:    w.Impacted,
-		Direct:      w.Direct,
+		Changes:     w.Changes,
 	}
 	return nil
 }
@@ -263,6 +270,25 @@ func normalizeID(raw string) (string, bool) {
 }
 
 func validateCreate(opts CreateOpts) error {
+	for _, changes := range []struct {
+		name    string
+		entries []string
+	}{
+		{"bound", opts.Changes.Bound},
+		{"unanalyzed", opts.Changes.Unanalyzed},
+	} {
+		if len(changes.entries) > maxChanges {
+			return fmt.Errorf("jobs: changes.%s exceeds %d entries", changes.name, maxChanges)
+		}
+		for i, value := range changes.entries {
+			if len(value) > maxChangeBytes {
+				return fmt.Errorf("jobs: changes.%s[%d] exceeds %d bytes", changes.name, i, maxChangeBytes)
+			}
+			if strings.ContainsAny(value, "\r\n\x00") {
+				return fmt.Errorf("jobs: changes.%s[%d] contains a forbidden control character", changes.name, i)
+			}
+		}
+	}
 	if strings.TrimSpace(opts.Baseline) == "" || strings.TrimSpace(opts.Patch) == "" {
 		return fmt.Errorf("jobs: baseline and patch are required")
 	}

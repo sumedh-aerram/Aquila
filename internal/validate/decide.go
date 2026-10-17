@@ -1,6 +1,11 @@
 package validate
 
 import (
+	"net"
+	"net/url"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/impact"
@@ -10,7 +15,48 @@ import (
 
 const minLatencyN = 20
 
-// Input is the executed experiment pieces needed to decide validation.
+// Validation blocker codes are stable identifiers for unmet policy requirements.
+const (
+	CodeLegacySchema       = "legacy_schema"
+	CodeDirtyBaseline      = "dirty_baseline"
+	CodeUnverifiedRevision = "unverified_revision"
+	CodeMissingTarget      = "missing_target"
+	CodeSameTarget         = "same_target"
+	CodeNotMatch           = "not_match"
+	CodeStepMissing        = "step_missing"
+	CodeStepFailed         = "step_failed"
+	CodeDuplicateStep      = "duplicate_step"
+	CodeLatencyN           = "latency_n"
+	CodeLatencyShift       = "latency_shift"
+	CodeUnanalyzedChange   = "unanalyzed_change"
+	CodeNoFunctionBinding  = "no_function_binding"
+	CodeNoRuntimeRoute     = "no_runtime_route"
+	CodeRouteMissed        = "route_missed"
+)
+
+var coreKinds = []string{plan.KindEnv, plan.KindBehavior, plan.KindLatency, plan.KindConcurrency}
+
+// Blocker explains why executed evidence cannot validate a change.
+type Blocker struct {
+	Code    string `json:"code"`
+	Subject string `json:"subject,omitempty"`
+}
+
+// String renders a stable code and optional subject.
+func (b Blocker) String() string {
+	if b.Subject == "" {
+		return b.Code
+	}
+	return b.Code + ":" + b.Subject
+}
+
+// Decision is the validation policy result.
+type Decision struct {
+	Validated bool      `json:"validated"`
+	Blockers  []Blocker `json:"blockers"`
+}
+
+// Input contains executed evidence and the classified change.
 type Input struct {
 	Dirty       bool
 	BaselineSHA string
@@ -18,53 +64,168 @@ type Input struct {
 	Patch       string
 	Plan        plan.DAG
 	Result      plan.Evidence
-	// Impacted is the "METHOD /path" routes joined to the change at runtime.
-	// When non-empty, some Workload step must reach one of them.
-	Impacted []string
-	Workload []replay.Step
-	// Direct is how many functions the diff changed. Changed code with no
-	// impacted route means the window never saw it run, so nothing was covered.
-	Direct int
+	Impacted    []string
+	Workload    []replay.Step
+	Changes     impact.Changes
 }
 
-// Earned reports whether required executable experiments completed with
-// overall match on a recorded clean revision. It is not a ship decision.
-func Earned(in Input) bool {
-	if in.Dirty || strings.TrimSpace(in.BaselineSHA) == "" {
-		return false
+// Legacy prevents historical evidence from earning current validation.
+func Legacy() Decision { return Decision{Blockers: []Blocker{{Code: CodeLegacySchema}}} }
+
+// Decide evaluates every validation requirement in deterministic policy order.
+func Decide(in Input) Decision {
+	blockers := []Blocker{}
+	if in.Dirty {
+		blockers = append(blockers, Blocker{Code: CodeDirtyBaseline})
 	}
-	if strings.TrimSpace(in.Baseline) == "" || strings.TrimSpace(in.Patch) == "" {
-		return false
+	if strings.TrimSpace(in.BaselineSHA) == "" {
+		blockers = append(blockers, Blocker{Code: CodeUnverifiedRevision, Subject: "baseline"})
 	}
+	blockers = append(blockers, targetBlockers(in)...)
 	if strings.ToLower(strings.TrimSpace(in.Result.Overall)) != replay.VerdictMatch {
-		return false
+		blockers = append(blockers, Blocker{Code: CodeNotMatch, Subject: in.Result.Overall})
 	}
-	by := byKind(in.Result.Steps)
-	for _, s := range in.Plan.Steps {
-		if !s.Required || s.Operator {
-			continue
+	blockers = append(blockers, duplicateBlockers(in)...)
+	blockers = append(blockers, stepBlockers(coreKinds, in.Result.Steps)...)
+	blockers = append(blockers, requiredStepBlockers(in)...)
+	blockers = append(blockers, changeBlockers(in)...)
+	blockers = append(blockers, coverageBlockers(in)...)
+	return Decision{Validated: len(blockers) == 0, Blockers: blockers}
+}
+
+func targetBlockers(in Input) []Blocker {
+	var blockers []Blocker
+	if strings.TrimSpace(in.Baseline) == "" {
+		blockers = append(blockers, Blocker{Code: CodeMissingTarget, Subject: "baseline"})
+	}
+	if strings.TrimSpace(in.Patch) == "" {
+		blockers = append(blockers, Blocker{Code: CodeMissingTarget, Subject: "patch"})
+	}
+	if in.Baseline != "" && in.Patch != "" && normURL(in.Baseline) == normURL(in.Patch) {
+		blockers = append(blockers, Blocker{Code: CodeSameTarget, Subject: normURL(in.Baseline)})
+	}
+	return sortedBlockers(blockers)
+}
+
+func duplicateBlockers(in Input) []Blocker {
+	counts := map[string][2]int{}
+	for _, step := range in.Plan.Steps {
+		n := counts[step.Kind]
+		n[0]++
+		counts[step.Kind] = n
+	}
+	for _, step := range in.Result.Steps {
+		n := counts[step.Kind]
+		n[1]++
+		counts[step.Kind] = n
+	}
+	var blockers []Blocker
+	for kind, n := range counts {
+		if n[0] > 1 || n[1] > 1 {
+			blockers = append(blockers, Blocker{Code: CodeDuplicateStep, Subject: kind})
 		}
-		got, ok := by[s.Kind]
-		if !ok {
-			return false
+	}
+	return sortedBlockers(blockers)
+}
+
+func stepBlockers(kinds []string, results []plan.StepResult) []Blocker {
+	var blockers []Blocker
+	for _, kind := range kinds {
+		found, failed := false, false
+		for _, step := range results {
+			if step.Kind != kind {
+				continue
+			}
+			found = true
+			failed = failed || !stepOK(kind, step)
+			if kind != plan.KindLatency {
+				continue
+			}
+			if n := latencyN(step); n < minLatencyN {
+				blockers = append(blockers, Blocker{Code: CodeLatencyN, Subject: strconv.Itoa(n)})
+			}
+			for _, row := range step.Latency {
+				if replay.Shifted(row) {
+					blockers = append(blockers, Blocker{Code: CodeLatencyShift, Subject: row.Method + " " + row.Path})
+				}
+			}
 		}
-		if !stepOK(s, got) {
-			return false
+		if !found {
+			blockers = append(blockers, Blocker{Code: CodeStepMissing, Subject: kind})
+		} else if failed {
+			blockers = append(blockers, Blocker{Code: CodeStepFailed, Subject: kind})
 		}
 	}
-	if _, ok := by[plan.KindEnv]; !ok {
-		return false
+	return sortedBlockers(blockers)
+}
+
+func requiredStepBlockers(in Input) []Blocker {
+	var kinds []string
+	for _, step := range in.Plan.Steps {
+		if step.Required && !step.Operator && !slices.Contains(coreKinds, step.Kind) && !slices.Contains(kinds, step.Kind) {
+			kinds = append(kinds, step.Kind)
+		}
 	}
-	if _, ok := by[plan.KindBehavior]; !ok {
-		return false
+	return stepBlockers(kinds, in.Result.Steps)
+}
+
+func changeBlockers(in Input) []Blocker {
+	var blockers []Blocker
+	for _, path := range in.Changes.Unanalyzed {
+		blockers = append(blockers, Blocker{Code: CodeUnanalyzedChange, Subject: path})
 	}
-	if _, ok := by[plan.KindLatency]; !ok {
-		return false
+	if len(in.Changes.Bound) == 0 {
+		blockers = append(blockers, Blocker{Code: CodeNoFunctionBinding})
+	} else if len(in.Impacted) == 0 {
+		blockers = append(blockers, Blocker{Code: CodeNoRuntimeRoute})
 	}
-	if len(in.Impacted) == 0 {
-		return in.Direct == 0
+	return sortedBlockers(blockers)
+}
+
+func coverageBlockers(in Input) []Blocker {
+	var blockers []Blocker
+	for _, route := range in.Impacted {
+		if !Covered([]string{route}, in.Workload, in.Result) {
+			blockers = append(blockers, Blocker{Code: CodeRouteMissed, Subject: route})
+		}
 	}
-	return Covered(in.Impacted, in.Workload, in.Result)
+	return sortedBlockers(blockers)
+}
+
+func sortedBlockers(blockers []Blocker) []Blocker {
+	sort.Slice(blockers, func(i, j int) bool {
+		if blockers[i].Subject == blockers[j].Subject {
+			return blockers[i].Code < blockers[j].Code
+		}
+		return blockers[i].Subject < blockers[j].Subject
+	})
+	return blockers
+}
+
+func normURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return strings.TrimRight(raw, "/")
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		host = "127.0.0.1"
+	}
+	port := u.Port()
+	if u.Scheme == "http" && port == "80" || u.Scheme == "https" && port == "443" {
+		port = ""
+	}
+	switch {
+	case port != "":
+		u.Host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		u.Host = "[" + host + "]"
+	default:
+		u.Host = host
+	}
+	return strings.TrimRight(u.String(), "/")
 }
 
 // Covered reports whether some workload step hit an impacted route and both
@@ -97,35 +258,15 @@ func Covered(impacted []string, work []replay.Step, res plan.Evidence) bool {
 	return false
 }
 
-func byKind(steps []plan.StepResult) map[string]plan.StepResult {
-	out := make(map[string]plan.StepResult, len(steps))
-	for _, s := range steps {
-		out[s.Kind] = s
-	}
-	return out
-}
-
-func stepOK(want plan.Step, got plan.StepResult) bool {
+func stepOK(kind string, got plan.StepResult) bool {
 	v := strings.ToLower(strings.TrimSpace(got.Verdict))
-	if v == "" || v == plan.VerdictSkipped || v == replay.VerdictIncomplete || v == "pass" || v == "validated" {
-		return false
-	}
-	switch want.Kind {
-	case plan.KindEnv:
+	switch kind {
+	case plan.KindEnv, plan.KindTests:
 		return v == plan.VerdictPrepared
 	case plan.KindBehavior, plan.KindConcurrency:
 		return v == replay.VerdictMatch
-	case plan.KindTests:
-		return v == plan.VerdictPrepared
 	case plan.KindLatency:
-		if v != plan.VerdictSamples {
-			return false
-		}
-		n := want.N
-		if n < 1 {
-			n = plan.DefaultLatencyN
-		}
-		if n < minLatencyN {
+		if v != plan.VerdictSamples || latencyN(got) < minLatencyN {
 			return false
 		}
 		for _, l := range got.Latency {
@@ -133,7 +274,7 @@ func stepOK(want plan.Step, got plan.StepResult) bool {
 				return false
 			}
 		}
-		return latencyN(got) >= minLatencyN
+		return true
 	default:
 		return v == replay.VerdictMatch || v == plan.VerdictSamples || v == plan.VerdictPrepared
 	}

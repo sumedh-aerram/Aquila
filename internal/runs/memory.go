@@ -104,6 +104,7 @@ func summaries(in []Record) []Record {
 			ArtifactDigest: r.ArtifactDigest,
 			Overall:        r.Overall,
 			Validated:      r.Validated,
+			Blockers:       r.Blockers,
 		}
 	}
 	return out

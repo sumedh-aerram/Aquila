@@ -1,6 +1,8 @@
 package runs
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -153,4 +155,48 @@ func sampleArtifact(t *testing.T, now time.Time, overall string) evidence.Artifa
 			Notes:   []string{"not validated"},
 		},
 	})
+}
+
+func legacyArtifact(t *testing.T) evidence.Artifact {
+	t.Helper()
+	raw, err := os.ReadFile("../evidence/testdata/v1_shop_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := evidence.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+func TestMemoryLegacyNotValidated(t *testing.T) {
+	st := NewMemory()
+	a := legacyArtifact(t)
+	rec, err := st.Insert(t.Context(), Record{Artifact: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(r Record) {
+		t.Helper()
+		if r.Validated || len(r.Blockers) != 1 || r.Blockers[0].Code != "legacy_schema" {
+			t.Fatalf("%+v", r)
+		}
+	}
+	check(rec)
+	got, err := st.Get(t.Context(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(got)
+	list, err := st.List(t.Context(), 20, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("%+v", list)
+	}
+	check(list[0])
+	if got.Artifact.ArtifactDigest != a.ArtifactDigest || !got.Artifact.Validated {
+		t.Fatal("rewrote legacy artifact")
+	}
 }

@@ -11,17 +11,19 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/runs"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 type storedRun struct {
-	ID             string            `json:"id"`
-	Overall        string            `json:"overall"`
-	Validated      bool              `json:"validated"`
-	ArtifactDigest string            `json:"artifact_digest"`
-	BaselineSHA    string            `json:"baseline_sha"`
-	Dirty          bool              `json:"dirty"`
-	Service        string            `json:"service,omitempty"`
-	Artifact       evidence.Artifact `json:"artifact"`
+	ID             string             `json:"id"`
+	Overall        string             `json:"overall"`
+	Blockers       []validate.Blocker `json:"blockers,omitempty"`
+	Validated      bool               `json:"validated"`
+	ArtifactDigest string             `json:"artifact_digest"`
+	BaselineSHA    string             `json:"baseline_sha"`
+	Dirty          bool               `json:"dirty"`
+	Service        string             `json:"service,omitempty"`
+	Artifact       evidence.Artifact  `json:"artifact"`
 }
 
 type storedRunList struct {
@@ -100,10 +102,8 @@ func getRun(ctx context.Context, c *Client, id string, stdout io.Writer) error {
 	writef(stdout, "run       %s\n", formatStored(body))
 	if body.Artifact.Schema != "" {
 		writeEvidence(stdout, body.Artifact.Result)
-		writeValidated(stdout, body.Validated)
-	} else {
-		writeValidated(stdout, body.Validated)
 	}
+	writeDecision(stdout, nil, validate.Decision{Validated: body.Validated, Blockers: body.Blockers})
 	return nil
 }
 
@@ -117,7 +117,7 @@ func postRun(ctx context.Context, c *Client, a evidence.Artifact, stdout io.Writ
 		return err
 	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
-	writeValidated(stdout, out.Validated)
+	writeDecision(stdout, nil, validate.Decision{Validated: out.Validated, Blockers: out.Blockers})
 	return nil
 }
 
@@ -144,8 +144,8 @@ func recordRun(ctx context.Context, api string, stdout io.Writer, a evidence.Art
 		return
 	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
-	if out.Validated != a.Validated {
-		writef(stdout, "validated  %t  (server re-derived; local said %t)\n", out.Validated, a.Validated)
+	if out.Validated != a.Decision().Validated {
+		writef(stdout, "validated  %t  (server re-derived; local said %t)\n", out.Validated, a.Decision().Validated)
 	}
 }
 

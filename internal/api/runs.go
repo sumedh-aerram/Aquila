@@ -11,16 +11,18 @@ import (
 	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/runs"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 type runCreated struct {
-	ID             string `json:"id"`
-	Overall        string `json:"overall"`
-	Validated      bool   `json:"validated"`
-	ArtifactDigest string `json:"artifact_digest"`
-	BaselineSHA    string `json:"baseline_sha,omitempty"`
-	Dirty          bool   `json:"dirty,omitempty"`
-	Service        string `json:"service,omitempty"`
+	ID             string             `json:"id"`
+	Overall        string             `json:"overall"`
+	Blockers       []validate.Blocker `json:"blockers,omitempty"`
+	Validated      bool               `json:"validated"`
+	ArtifactDigest string             `json:"artifact_digest"`
+	BaselineSHA    string             `json:"baseline_sha,omitempty"`
+	Dirty          bool               `json:"dirty,omitempty"`
+	Service        string             `json:"service,omitempty"`
 }
 
 type runListResponse struct {
@@ -28,13 +30,14 @@ type runListResponse struct {
 }
 
 type runGetResponse struct {
-	ID             string            `json:"id"`
-	Overall        string            `json:"overall"`
-	Validated      bool              `json:"validated"`
-	ArtifactDigest string            `json:"artifact_digest"`
-	BaselineSHA    string            `json:"baseline_sha,omitempty"`
-	Dirty          bool              `json:"dirty,omitempty"`
-	Artifact       evidence.Artifact `json:"artifact"`
+	ID             string             `json:"id"`
+	Overall        string             `json:"overall"`
+	Blockers       []validate.Blocker `json:"blockers,omitempty"`
+	Validated      bool               `json:"validated"`
+	ArtifactDigest string             `json:"artifact_digest"`
+	BaselineSHA    string             `json:"baseline_sha,omitempty"`
+	Dirty          bool               `json:"dirty,omitempty"`
+	Artifact       evidence.Artifact  `json:"artifact"`
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +58,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	a, err := evidence.Decode(bytes.NewReader(raw))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid artifact: " + clipQuery(err.Error(), 200)})
+		return
+	}
+	if a.Schema != evidence.SchemaV2 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "legacy schema"})
 		return
 	}
 	rec, err := s.runStore.Insert(r.Context(), runs.Record{Artifact: a})
@@ -134,6 +141,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ID:             rec.ID,
 		Overall:        rec.Overall,
 		Validated:      rec.Validated,
+		Blockers:       rec.Blockers,
 		ArtifactDigest: rec.ArtifactDigest,
 		BaselineSHA:    rec.BaselineSHA,
 		Dirty:          rec.Dirty,
@@ -146,6 +154,7 @@ func summaryFrom(rec runs.Record) runCreated {
 		ID:             rec.ID,
 		Overall:        rec.Overall,
 		Validated:      rec.Validated,
+		Blockers:       rec.Blockers,
 		ArtifactDigest: rec.ArtifactDigest,
 		BaselineSHA:    rec.BaselineSHA,
 		Dirty:          rec.Dirty,

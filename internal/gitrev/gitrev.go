@@ -3,6 +3,7 @@ package gitrev
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,7 +21,7 @@ const (
 var ErrNotGit = fmt.Errorf("gitrev: not a git work tree")
 
 // State reports HEAD and whether path has uncommitted changes.
-// If path is not inside a git work tree, sha is empty and dirty is false.
+// An unborn HEAD has an empty SHA. Outside a git work tree, dirty is also false.
 func State(ctx context.Context, path string) (sha string, dirty bool, err error) {
 	root, rel, err := locate(ctx, path)
 	if err != nil {
@@ -31,14 +32,27 @@ func State(ctx context.Context, path string) (sha string, dirty bool, err error)
 	}
 	shaOut, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD").Output()
 	if err != nil {
-		return "", false, nil
+		if !unbornHEAD(ctx, root) {
+			return "", false, fmt.Errorf("gitrev: rev-parse: %w", err)
+		}
+	} else {
+		sha = strings.TrimSpace(string(shaOut))
 	}
-	sha = strings.TrimSpace(string(shaOut))
 	stOut, err := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=all", "--", rel).Output()
 	if err != nil {
-		return sha, false, nil
+		return sha, false, fmt.Errorf("gitrev: status: %w", err)
 	}
-	return sha, len(sourcePorcelain(root, stOut)) > 0, nil
+	return sha, len(bytes.TrimSpace(stOut)) > 0, nil
+}
+
+func unbornHEAD(ctx context.Context, root string) bool {
+	ref, err := exec.CommandContext(ctx, "git", "-C", root, "symbolic-ref", "--quiet", "HEAD").Output()
+	if err != nil {
+		return false
+	}
+	err = exec.CommandContext(ctx, "git", "-C", root, "show-ref", "--verify", "--quiet", strings.TrimSpace(string(ref))).Run()
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
 // ChangedPaths lists worktree paths that differ from HEAD, including untracked files.
@@ -79,12 +93,14 @@ func UnifiedDiff(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gitrev: status: %w", err)
 	}
-	nUntracked := 0
-	for _, p := range porcelainUntracked(root, stOut) {
-		if nUntracked >= maxUntracked {
-			break
+	untracked := porcelainUntracked(root, stOut)
+	if len(untracked) > maxUntracked {
+		return nil, fmt.Errorf("gitrev: %d untracked files exceed cap %d", len(untracked), maxUntracked)
+	}
+	for _, p := range untracked {
+		if skipWorktree(root, p) {
+			continue
 		}
-		nUntracked++
 		stub := stubNewFile(p)
 		if buf.Len()+len(stub) > maxDiffBytes {
 			return nil, fmt.Errorf("gitrev: diff exceeds %d bytes", maxDiffBytes)
@@ -138,23 +154,11 @@ func locate(ctx context.Context, path string) (root, rel string, err error) {
 	return root, rel, nil
 }
 
-func sourcePorcelain(root string, out []byte) []string {
-	var lines []string
-	for _, line := range strings.Split(string(out), "\n") {
-		p := porcelainPath(line)
-		if p == "" || skipWorktree(root, p) {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return lines
-}
-
 func porcelainPaths(root string, out []byte) []string {
 	var paths []string
 	for _, line := range strings.Split(string(out), "\n") {
 		p := porcelainPath(line)
-		if p == "" || skipWorktree(root, p) {
+		if p == "" {
 			continue
 		}
 		paths = append(paths, p)
@@ -172,7 +176,7 @@ func porcelainUntracked(root string, out []byte) []string {
 			continue
 		}
 		p := porcelainPath(line)
-		if p == "" || skipWorktree(root, p) {
+		if p == "" {
 			continue
 		}
 		paths = append(paths, p)

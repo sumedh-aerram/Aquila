@@ -188,7 +188,8 @@ func TestOverlappingFuncsIgnoresLinesBetweenFunctions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var got []string
-			for _, h := range overlappingFuncs(funcs, tc.lines) {
+			hits, _ := overlappingFuncs(funcs, tc.lines)
+			for _, h := range hits {
 				got = append(got, h.fn.Name)
 			}
 			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
@@ -201,8 +202,45 @@ func TestOverlappingFuncsIgnoresLinesBetweenFunctions(t *testing.T) {
 func TestOverlappingFuncsFallsBackWithoutEndLine(t *testing.T) {
 	t.Parallel()
 	funcs := []source.Node{{ID: "a", Name: "A", Line: 1}, {ID: "b", Name: "B", Line: 10}}
-	hits := overlappingFuncs(funcs, []int{5})
+	hits, _ := overlappingFuncs(funcs, []int{5})
 	if len(hits) != 1 || hits[0].fn.Name != "A" {
 		t.Fatalf("legacy snapshot without end_line: %+v", hits)
+	}
+}
+
+func TestAnalyzeLineOutsideFunc(t *testing.T) {
+	t.Parallel()
+	g, err := source.FromSnapshot(source.Snapshot{Module: "example.com/demo", Nodes: []source.Node{
+		{ID: "file:a.go", Kind: source.KindFile, Name: "a.go", File: "a.go"},
+		{ID: "func:F", Kind: source.KindFunction, Name: "F", File: "a.go", Line: 5, EndLine: 7},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := diff.Parse([]byte(`--- a/a.go
++++ b/a.go
+@@ -3 +3 @@
+-const limit = 1
++const limit = 2
+@@ -5,3 +5,3 @@
+ func F() int {
+- return limit
++ return limit + 1
+ }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := Analyze(g, d, locate.Snapshot{}, graph.Snapshot{})
+	outside, inside := false, false
+	for _, f := range rep.Direct {
+		outside = outside || f.Reason == "changed_outside_func"
+		inside = inside || f.Reason == "changed_lines"
+	}
+	if !outside || !inside {
+		t.Fatalf("direct=%+v", rep.Direct)
+	}
+	if c := Classify(rep); len(c.Bound) != 0 || len(c.Unanalyzed) != 1 || c.Unanalyzed[0] != "a.go" {
+		t.Fatalf("%+v", c)
 	}
 }

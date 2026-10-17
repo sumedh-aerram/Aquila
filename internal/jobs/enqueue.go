@@ -53,10 +53,9 @@ func buildJob(opts CreateOpts) (Job, error) {
 	if deadline.IsZero() {
 		deadline = now.Add(DefaultDeadline)
 	}
-	return Job{
+	job := Job{
 		ID:          id,
 		Created:     now,
-		Status:      jobStatus(tasks),
 		Service:     clipService(opts.Service),
 		Baseline:    opts.Baseline,
 		Patch:       opts.Patch,
@@ -66,10 +65,11 @@ func buildJob(opts CreateOpts) (Job, error) {
 		Workload:    workloadOf(opts.Workload),
 		Plan:        opts.Plan,
 		Impacted:    append([]string(nil), opts.Impacted...),
-		Direct:      opts.Direct,
+		Changes:     opts.Changes,
 		Tasks:       tasks,
-		Validated:   false,
-	}, nil
+	}
+	refreshJob(&job)
+	return job, nil
 }
 
 func settle(tasks []Task) {

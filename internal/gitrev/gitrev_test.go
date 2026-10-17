@@ -2,9 +2,11 @@ package gitrev
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -29,12 +31,7 @@ func TestStateNotGit(t *testing.T) {
 
 func TestStateHEADAndDirty(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
-	dir := t.TempDir()
-	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "-c", "user.email=aquila@test", "-c", "user.name=aquila", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "init")
+	dir := stateRepo(t, true)
 	sha, dirty, err := State(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
@@ -77,12 +74,7 @@ func TestStateHEADAndDirty(t *testing.T) {
 
 func TestUnifiedDiffSkipsUntrackedBinary(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
-	dir := t.TempDir()
-	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "-c", "user.email=aquila@test", "-c", "user.name=aquila", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "init")
+	dir := stateRepo(t, true)
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -103,18 +95,14 @@ func TestUnifiedDiffSkipsUntrackedBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 1 || paths[0] != "main.go" {
+	if len(paths) != 2 || paths[0] != "ledger" || paths[1] != "main.go" {
 		t.Fatalf("paths=%v", paths)
 	}
 }
 
 func TestUnifiedDiffTrackedHunk(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not on PATH")
-	}
-	dir := t.TempDir()
-	runGit(t, dir, "init", "-q")
+	dir := stateRepo(t, false)
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +143,112 @@ func runGit(t *testing.T, dir string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func stateRepo(t *testing.T, committed bool) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	if committed {
+		runGit(t, dir, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "init")
+	}
+	return dir
+}
+
+func TestStateStatusError(t *testing.T) {
+	t.Parallel()
+	dir := stateRepo(t, true)
+	if err := os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("garbage"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := State(t.Context(), dir); err == nil {
+		t.Fatal("corrupt index must fail")
+	}
+}
+
+func TestStateDirtyBinary(t *testing.T) {
+	t.Parallel()
+	dir := stateRepo(t, true)
+	p := filepath.Join(dir, "a.png")
+	if err := os.WriteFile(p, []byte{0, 1}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "a.png")
+	runGit(t, dir, "-c", "user.email=aquila@test", "-c", "user.name=aquila", "-c", "commit.gpgsign=false", "commit", "-qm", "binary")
+	if err := os.WriteFile(p, []byte{0, 2}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, dirty, err := State(t.Context(), dir); err != nil || !dirty {
+		t.Fatalf("dirty=%t err=%v", dirty, err)
+	}
+}
+
+func TestUnifiedDiffUntrackedCap(t *testing.T) {
+	t.Parallel()
+	dir := stateRepo(t, true)
+	for i := 0; i < 51; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file%d.go", i)), []byte("package p"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := UnifiedDiff(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "51 untracked files exceed cap 50") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestStateUnbornHEAD(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name           string
+		dirty, corrupt bool
+	}{
+		{name: "clean"},
+		{name: "untracked", dirty: true},
+		{name: "corrupt index", corrupt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := stateRepo(t, false)
+			if tc.dirty {
+				if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package p"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.corrupt {
+				if err := os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("garbage"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sha, dirty, err := State(t.Context(), dir)
+			if tc.corrupt {
+				if err == nil {
+					t.Fatal("corrupt unborn index accepted")
+				}
+				return
+			}
+			if err != nil || sha != "" || dirty != tc.dirty {
+				t.Fatalf("sha=%q dirty=%t err=%v", sha, dirty, err)
+			}
+		})
+	}
+}
+
+func TestStateRevisionError(t *testing.T) {
+	t.Parallel()
+	dir := stateRepo(t, true)
+	raw, err := os.ReadFile(filepath.Join(dir, ".git", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := strings.TrimSpace(strings.TrimPrefix(string(raw), "ref: "))
+	if err := os.WriteFile(filepath.Join(dir, ".git", ref), []byte("garbage\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := State(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "rev-parse") {
+		t.Fatalf("corrupt revision must fail: %v", err)
 	}
 }

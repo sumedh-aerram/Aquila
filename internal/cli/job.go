@@ -14,6 +14,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/jobs"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 // RunJob enqueues a plan as a durable DAG. It does not start Compose.
@@ -89,7 +90,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 		Workload:    w,
 		Plan:        dag,
 		Impacted:    impact.RuntimeRoutes(rep),
-		Direct:      len(rep.Direct),
+		Changes:     impact.Classify(rep),
 	})
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
@@ -212,8 +213,5 @@ func writeJob(w io.Writer, j jobs.Job) {
 			writef(w, "    %-6s %-22s %s%s\n", lat.Method, clipRoute(lat.Path), formatLatency(lat), refused[lat.Method+" "+lat.Path])
 		}
 	}
-	writef(w, "validated  %t\n", j.Validated)
-	if !j.Validated {
-		writef(w, "not validated. match is not a pass.\n")
-	}
+	writeDecision(w, nil, validate.Decision{Validated: j.Validated, Blockers: j.Blockers})
 }

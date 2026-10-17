@@ -3,6 +3,7 @@ package evidence
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 func TestBuildOmitsBodiesAndIsNeverValidated(t *testing.T) {
@@ -30,7 +32,7 @@ func TestBuildOmitsBodiesAndIsNeverValidated(t *testing.T) {
 			Notes:   []string{"not validated. no pass threshold. no impacted tests."},
 		},
 	})
-	if a.Validated || a.Schema != SchemaV1 {
+	if a.Validated || a.Schema != SchemaV2 {
 		t.Fatalf("%+v", a)
 	}
 	raw, err := Marshal(a)
@@ -64,7 +66,7 @@ func TestBuildEarnsValidated(t *testing.T) {
 		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
 		Impact: impact.Report{
 			Files:   []string{"a.go"},
-			Direct:  []impact.Finding{{Name: "F"}},
+			Direct:  []impact.Finding{{Name: "F", File: "a.go", SourceID: "f", Reason: "changed_lines"}},
 			Runtime: []impact.Finding{{Name: "F", Route: "GET /healthz"}},
 		},
 		Plan: plan.DAG{Steps: []plan.Step{
@@ -78,6 +80,7 @@ func TestBuildEarnsValidated(t *testing.T) {
 				{ID: "env", Kind: plan.KindEnv, Verdict: plan.VerdictPrepared},
 				answered(replay.Step{Method: "GET", Path: "/healthz"}).Steps[0],
 				{ID: "latency", Kind: plan.KindLatency, Verdict: plan.VerdictSamples, Latency: lat},
+				{ID: "concurrency", Kind: plan.KindConcurrency, Verdict: replay.VerdictMatch},
 			},
 		},
 	})
@@ -103,7 +106,7 @@ func TestBuildEarnsValidated(t *testing.T) {
 
 func TestDecodeRejectsUnearnedValidated(t *testing.T) {
 	t.Parallel()
-	raw := []byte(`{"schema":"aquila.evidence.v1","validated":true,"result":{"overall":"match"}}`)
+	raw := []byte(`{"schema":"aquila.evidence.v2","validated":true,"result":{"overall":"match"}}`)
 	if _, err := Decode(bytes.NewReader(raw)); err == nil {
 		t.Fatal("expected error")
 	}
@@ -229,4 +232,99 @@ func sampleDiffer(t *testing.T) Artifact {
 			Notes: []string{"not validated. no pass threshold. no impacted tests."},
 		},
 	})
+}
+
+func legacyShopArtifact(t *testing.T) Artifact {
+	t.Helper()
+	in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
+	a := Build(in)
+	a.Schema = SchemaV1
+	a.Impact.Changes = impact.Changes{}
+	a.Blockers = nil
+	a.Validated = true
+	a.ArtifactDigest = digestArtifact(a)
+	return a
+}
+
+func TestDecodeLegacyV1Validated(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/v1_shop_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Validated || got.Decision().Validated || got.Decision().Blockers[0].Code != "legacy_schema" {
+		t.Fatalf("%+v", got.Decision())
+	}
+	if err := Verify(got); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDecodeV1TamperedDigest(t *testing.T) {
+	t.Parallel()
+	a := legacyShopArtifact(t)
+	a.Patch = "http://127.0.0.1:9999"
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(raw)); err == nil {
+		t.Fatal("tampered v1 accepted")
+	}
+}
+
+func TestCheckV2RejectsUnearned(t *testing.T) {
+	t.Parallel()
+	a := Build(earnedInput(replay.Step{Method: "POST", Path: "/checkout"}))
+	a.Dirty = true
+	a.Validated = true
+	a.ArtifactDigest = digestArtifact(a)
+	if err := Check(a); err == nil || !strings.Contains(err.Error(), "unearned") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestBuildV2DigestStable(t *testing.T) {
+	t.Parallel()
+	in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
+	a, b := Build(in), Build(in)
+	if a.Schema != SchemaV2 || a.ArtifactDigest == "" || !EqualJSON(a, b) {
+		t.Fatalf("unstable: %+v %+v", a, b)
+	}
+	a.Blockers = append(a.Blockers, validate.Blocker{Code: "tampered"})
+	if err := Verify(a); err == nil {
+		t.Fatal("blockers not digest covered")
+	}
+}
+
+func TestCheckV2RejectsForgedBlockers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		blockers []validate.Blocker
+	}{
+		{name: "invented", blockers: []validate.Blocker{{Code: validate.CodeDirtyBaseline}}},
+		{name: "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
+			if tc.name == "missing" {
+				in.Dirty = true
+			}
+			a := Build(in)
+			a.Blockers = tc.blockers
+			a.ArtifactDigest = digestArtifact(a)
+			if err := Verify(a); err != nil {
+				t.Fatal(err)
+			}
+			if err := Check(a); err == nil || !strings.Contains(err.Error(), "blockers") {
+				t.Fatalf("%v", err)
+			}
+		})
+	}
 }

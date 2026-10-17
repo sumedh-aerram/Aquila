@@ -10,6 +10,65 @@ import (
 	"github.com/sumedhaerram/aquila/internal/locate"
 )
 
+// Changes separates function bindings from changes the analyzer cannot establish.
+type Changes struct {
+	Bound      []string `json:"bound,omitempty"`
+	Unanalyzed []string `json:"unanalyzed,omitempty"`
+}
+
+// Inert reports explicitly allowed files that do not change the built application.
+func Inert(p string) bool {
+	switch path.Ext(p) {
+	case ".md", ".rst":
+		return true
+	}
+	b := path.Base(p)
+	return strings.HasPrefix(b, "LICENSE") ||
+		strings.HasPrefix(b, "NOTICE") ||
+		strings.HasPrefix(b, "AUTHORS") ||
+		strings.HasPrefix(b, "CHANGELOG") ||
+		b == "CODEOWNERS" || strings.HasSuffix(b, "_test.go")
+}
+
+// Classify requires every direct finding for a path to bind changed function lines.
+func Classify(rep Report) Changes {
+	var c Changes
+	bound := map[string]bool{}
+	unknown := map[string]bool{}
+	for _, p := range rep.Files {
+		if Inert(p) {
+			continue
+		}
+		var ids []string
+		analyzed := true
+		for _, f := range rep.Direct {
+			if f.File != p {
+				continue
+			}
+			if f.Reason != "changed_lines" || f.SourceID == "" {
+				analyzed = false
+			}
+			ids = append(ids, f.SourceID)
+		}
+		if !analyzed || len(ids) == 0 {
+			unknown[p] = true
+			continue
+		}
+		for _, id := range ids {
+			bound[id] = true
+		}
+	}
+	for id := range bound {
+		c.Bound = append(c.Bound, id)
+	}
+	sort.Strings(c.Bound)
+	for p := range unknown {
+		c.Unanalyzed = append(c.Unanalyzed, p)
+	}
+	sort.Strings(c.Unanalyzed)
+	return c
+}
+
 // FromDiff reports file-level blast radius when there is no typed source graph.
 // Runtime findings require span code.file.path to match a changed path. Routes
 // and filenames are not guessed.

@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 func TestCreateReadiesEnv(t *testing.T) {
@@ -355,6 +357,9 @@ func TestJobEarnsValidated(t *testing.T) {
 	opts := sampleOpts(t)
 	opts.BaselineSHA = "abc123"
 	opts.Dirty = false
+	opts.Changes = impact.Changes{Bound: []string{"charge"}}
+	opts.Impacted = []string{"GET /healthz"}
+	opts.Plan.Steps = append(opts.Plan.Steps, plan.Step{ID: "concurrency", Kind: plan.KindConcurrency, Required: true, DependsOn: []string{"latency"}})
 	job, err := st.Create(t.Context(), opts)
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +375,9 @@ func TestJobEarnsValidated(t *testing.T) {
 			t.Fatalf("leased %s want %s", lease.Task.Kind, kind)
 		}
 		res := plan.StepResult{ID: lease.Task.PlanID, Kind: kind, Verdict: verdict, Latency: lat}
+		if kind == plan.KindBehavior {
+			res.Steps = []replay.Delta{{Method: "GET", Path: "/healthz", BaselineStatus: 200, PatchStatus: 200}}
+		}
 		if _, err := st.Commit(t.Context(), lease.Task.ID, lease.Attempt, res, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -383,6 +391,7 @@ func TestJobEarnsValidated(t *testing.T) {
 		Patch:    replay.Summary{N: 20, HasP95: true},
 	}}
 	commitKind(plan.KindLatency, plan.VerdictSamples, lat)
+	commitKind(plan.KindConcurrency, replay.VerdictMatch, nil)
 	got, err := st.Get(t.Context(), job.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -460,4 +469,75 @@ func taskKind(j Job, kind string) Task {
 		}
 	}
 	return Task{}
+}
+
+func TestJobLegacyPayloadWithoutChangesNotValidated(t *testing.T) {
+	t.Parallel()
+	lat := replay.Summary{N: 20, HasP95: true}
+	job := Job{
+		Status:      StatusComplete,
+		Baseline:    "http://127.0.0.1:1",
+		Patch:       "http://127.0.0.1:2",
+		BaselineSHA: "abc",
+		Validated:   true,
+		Plan: plan.DAG{Steps: []plan.Step{
+			{Kind: plan.KindEnv, Required: true},
+			{Kind: plan.KindBehavior, Required: true},
+			{Kind: plan.KindLatency, Required: true, N: 20},
+		}},
+		Tasks: []Task{
+			{Kind: plan.KindEnv, State: StateSucceeded, Result: plan.StepResult{
+				Kind: plan.KindEnv, Verdict: plan.VerdictPrepared,
+			}},
+			{Kind: plan.KindBehavior, State: StateSucceeded, Result: plan.StepResult{
+				Kind: plan.KindBehavior, Verdict: replay.VerdictMatch,
+			}},
+			{Kind: plan.KindLatency, State: StateSucceeded, Result: plan.StepResult{
+				Kind: plan.KindLatency, Verdict: plan.VerdictSamples,
+				Latency: []replay.StepLatency{{Method: "GET", Path: "/healthz", Baseline: lat, Patch: lat}},
+			}},
+			{Kind: plan.KindConcurrency, State: StateSucceeded, Result: plan.StepResult{
+				Kind: plan.KindConcurrency, Verdict: replay.VerdictMatch,
+			}},
+		},
+	}
+	raw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append([]byte(`{"direct":0,`), raw[1:]...)
+	got, err := decodeJob(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Validated || len(got.Blockers) != 1 || got.Blockers[0].Code != validate.CodeNoFunctionBinding {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestJobBlockers(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{StatusPending, StatusRunning, StatusFailed, StatusCanceled} {
+		t.Run(status, func(t *testing.T) {
+			d := jobDecision(Job{Status: status})
+			if d.Validated || len(d.Blockers) != 1 || d.Blockers[0].Code != validate.CodeStepFailed || d.Blockers[0].Subject != "job:"+status {
+				t.Fatalf("%+v", d)
+			}
+		})
+	}
+	st := NewMemory()
+	job, err := st.Create(t.Context(), sampleOpts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.Blockers) == 0 {
+		t.Fatalf("%+v", job)
+	}
+	canceled, err := st.Cancel(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled.Validated || len(canceled.Blockers) != 1 || canceled.Blockers[0].Subject != "job:canceled" {
+		t.Fatalf("%+v", canceled)
+	}
 }
