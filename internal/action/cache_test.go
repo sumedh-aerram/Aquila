@@ -52,3 +52,21 @@ func TestCacheSkipsIncomplete(t *testing.T) {
 		t.Fatalf("incomplete must not hit, ok=%v err=%v", ok, err)
 	}
 }
+
+func TestCacheSkipsNondeterministicKinds(t *testing.T) {
+	for _, kind := range []string{plan.KindEnv, plan.KindLatency, plan.KindConcurrency} {
+		t.Run(kind, func(t *testing.T) {
+			c, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			k := Key{V: 2, JobID: "job", Kind: kind}
+			if err := c.Put(t.Context(), k, plan.StepResult{Kind: kind, Verdict: plan.VerdictPrepared}); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok, err := c.Get(t.Context(), k); err != nil || ok {
+				t.Fatalf("hit=%t err=%v", ok, err)
+			}
+		})
+	}
+}

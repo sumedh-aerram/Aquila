@@ -9,11 +9,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/diff"
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 )
 
 const (
@@ -143,7 +143,10 @@ func Prepare(ctx context.Context, opts PrepareOpts) (Env, error) {
 		return Env{}, err
 	}
 
-	sha, dirty := gitState(ctx, shop)
+	sha, dirty, err := gitrev.State(ctx, shop)
+	if err != nil {
+		return Env{}, err
+	}
 	env := Env{
 		ID:             id,
 		Root:           root,
@@ -326,33 +329,4 @@ func skipName(name string) bool {
 
 func skipRel(rel string) bool {
 	return rel == ".git" || strings.HasPrefix(rel, ".git/")
-}
-
-func gitState(ctx context.Context, shop string) (sha string, dirty bool) {
-	root := gitRoot(ctx, shop)
-	if root == "" {
-		return "", false
-	}
-	shaOut, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return "", false
-	}
-	sha = strings.TrimSpace(string(shaOut))
-	rel := shop
-	if r, err := filepath.Rel(root, shop); err == nil {
-		rel = r
-	}
-	st, err := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--", rel).Output()
-	if err != nil {
-		return sha, false
-	}
-	return sha, strings.TrimSpace(string(st)) != ""
-}
-
-func gitRoot(ctx context.Context, dir string) string {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }

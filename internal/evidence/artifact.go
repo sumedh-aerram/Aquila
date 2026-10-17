@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,28 +18,31 @@ import (
 )
 
 const (
+	// SchemaV2 identifies evidence graded with explicit blockers.
+	SchemaV2 = "aquila.evidence.v2"
 	SchemaV1 = "aquila.evidence.v1"
 	MaxBytes = 1 << 20
 )
 
-// Artifact is the durable record of one local experiment. Validated is earned
-// only when required executable steps completed with overall match.
+// Artifact records one local experiment, including its classified changes,
+// executed results and validation decision.
 type Artifact struct {
-	Schema         string        `json:"schema"`
-	Recorded       time.Time     `json:"recorded_at"`
-	Baseline       string        `json:"baseline"`
-	Patch          string        `json:"patch"`
-	BaselineSHA    string        `json:"baseline_sha"`
-	Dirty          bool          `json:"dirty"`
-	Service        string        `json:"service,omitempty"`
-	WorkloadDigest string        `json:"workload_digest"`
-	ArtifactDigest string        `json:"artifact_digest"`
-	Workload       []Request     `json:"workload"`
-	Impact         ImpactSummary `json:"impact"`
-	Coverage       *Coverage     `json:"coverage,omitempty"`
-	Plan           plan.DAG      `json:"plan"`
-	Result         plan.Evidence `json:"result"`
-	Validated      bool          `json:"validated"`
+	Schema         string             `json:"schema"`
+	Recorded       time.Time          `json:"recorded_at"`
+	Baseline       string             `json:"baseline"`
+	Patch          string             `json:"patch"`
+	BaselineSHA    string             `json:"baseline_sha"`
+	Dirty          bool               `json:"dirty"`
+	Service        string             `json:"service,omitempty"`
+	WorkloadDigest string             `json:"workload_digest"`
+	ArtifactDigest string             `json:"artifact_digest"`
+	Workload       []Request          `json:"workload"`
+	Impact         ImpactSummary      `json:"impact"`
+	Coverage       *Coverage          `json:"coverage,omitempty"`
+	Plan           plan.DAG           `json:"plan"`
+	Result         plan.Evidence      `json:"result"`
+	Validated      bool               `json:"validated"`
+	Blockers       []validate.Blocker `json:"blockers,omitempty"`
 }
 
 // Request is one workload step without a body. Headers lists names only;
@@ -52,13 +56,14 @@ type Request struct {
 
 // ImpactSummary is blast-radius counts and names. It does not keep hunk text.
 type ImpactSummary struct {
-	Files      int      `json:"files"`
-	Direct     int      `json:"direct"`
-	Likely     int      `json:"likely"`
-	Runtime    int      `json:"runtime"`
-	Unobserved int      `json:"unobserved"`
-	Changed    []string `json:"changed_files,omitempty"`
-	DirectName []string `json:"direct_names,omitempty"`
+	Changes    impact.Changes `json:"changes,omitzero"`
+	Files      int            `json:"files"`
+	Direct     int            `json:"direct"`
+	Likely     int            `json:"likely"`
+	Runtime    int            `json:"runtime"`
+	Unobserved int            `json:"unobserved"`
+	Changed    []string       `json:"changed_files,omitempty"`
+	DirectName []string       `json:"direct_names,omitempty"`
 }
 
 // Input is the executed experiment pieces needed to persist evidence.
@@ -82,7 +87,7 @@ func Build(in Input) Artifact {
 		now = time.Now().UTC().Truncate(time.Second)
 	}
 	a := Artifact{
-		Schema:      SchemaV1,
+		Schema:      SchemaV2,
 		Recorded:    now,
 		Baseline:    in.Baseline,
 		Patch:       in.Patch,
@@ -95,7 +100,8 @@ func Build(in Input) Artifact {
 		Result:      in.Result,
 	}
 	a.Coverage = coverageOf(in.Impact, a.Workload, in.Result)
-	a.Validated = earned(a)
+	d := a.Decision()
+	a.Validated, a.Blockers = d.Validated, d.Blockers
 	a.WorkloadDigest = digestWorkload(a.Workload)
 	a.ArtifactDigest = digestArtifact(a)
 	return a
@@ -117,6 +123,7 @@ func summarizeImpact(rep impact.Report) ImpactSummary {
 		}
 	}
 	return ImpactSummary{
+		Changes:    impact.Classify(rep),
 		Files:      len(rep.Files),
 		Direct:     len(rep.Direct),
 		Likely:     len(rep.Likely),
@@ -143,7 +150,7 @@ func Marshal(a Artifact) ([]byte, error) {
 	return raw, nil
 }
 
-// Decode reads a JSON artifact. It rejects pass and unearned validated claims.
+// Decode reads checked evidence while preserving legacy validation claims as history.
 func Decode(r io.Reader) (Artifact, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, int64(MaxBytes)+1))
 	if err != nil {
@@ -169,9 +176,26 @@ func Decode(r io.Reader) (Artifact, error) {
 	return a, nil
 }
 
-// Check rejects unsupported schemas, pass overall, and unearned validated bits.
+// Check verifies integrity and requires v2 validation claims to agree with policy.
 func Check(a Artifact) error {
-	if a.Schema != SchemaV1 {
+	if err := Verify(a); err != nil {
+		return err
+	}
+	if a.Schema == SchemaV2 {
+		d := a.Decision()
+		if a.Validated != d.Validated {
+			return fmt.Errorf("evidence: validated is unearned")
+		}
+		if !slices.Equal(a.Blockers, d.Blockers) {
+			return fmt.Errorf("evidence: blockers do not match decision")
+		}
+	}
+	return nil
+}
+
+// Verify checks schema, verdict and content integrity without applying policy.
+func Verify(a Artifact) error {
+	if a.Schema != SchemaV1 && a.Schema != SchemaV2 {
 		return fmt.Errorf("evidence: unsupported schema %q", a.Schema)
 	}
 	switch strings.ToLower(strings.TrimSpace(a.Result.Overall)) {
@@ -183,19 +207,20 @@ func Check(a Artifact) error {
 	default:
 		return fmt.Errorf("evidence: unknown overall %q", a.Result.Overall)
 	}
-	if a.Validated && !earned(a) {
-		return fmt.Errorf("evidence: validated is unearned")
-	}
-	if a.WorkloadDigest != "" && a.WorkloadDigest != digestWorkload(a.Workload) {
+	if (a.Schema == SchemaV2 || a.WorkloadDigest != "") && a.WorkloadDigest != digestWorkload(a.Workload) {
 		return fmt.Errorf("evidence: workload digest mismatch")
 	}
-	if a.ArtifactDigest != "" && a.ArtifactDigest != digestArtifact(a) {
+	if (a.Schema == SchemaV2 || a.ArtifactDigest != "") && a.ArtifactDigest != digestArtifact(a) {
 		return fmt.Errorf("evidence: artifact digest mismatch")
 	}
 	return nil
 }
 
-func earned(a Artifact) bool {
+// Decision derives current policy without changing persisted evidence.
+func (a Artifact) Decision() validate.Decision {
+	if a.Schema == SchemaV1 {
+		return validate.Legacy()
+	}
 	in := validate.Input{
 		Dirty:       a.Dirty,
 		BaselineSHA: a.BaselineSHA,
@@ -207,11 +232,11 @@ func earned(a Artifact) bool {
 	if a.Coverage != nil {
 		in.Impacted = a.Coverage.Impacted
 	}
-	in.Direct = a.Impact.Direct
+	in.Changes = a.Impact.Changes
 	for _, r := range a.Workload {
 		in.Workload = append(in.Workload, replay.Step{Method: r.Method, Path: r.Path})
 	}
-	return validate.Earned(in)
+	return validate.Decide(in)
 }
 
 func digestWorkload(rs []Request) string {

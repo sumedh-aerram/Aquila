@@ -71,7 +71,10 @@ func Analyze(g *source.Graph, d diff.Diff, loc locate.Snapshot, rt graph.Snapsho
 			})
 			continue
 		}
-		hits := overlappingFuncs(idx.funcs[path], f.Lines)
+		hits, outside := overlappingFuncs(idx.funcs[path], f.Lines)
+		if outside {
+			out.Direct = appendFinding(out.Direct, Finding{Name: fileNode.Name, File: path, SourceID: fileNode.ID, Reason: "changed_outside_func", Provenance: "diff"})
+		}
 		if len(hits) == 0 {
 			out.Direct = appendFinding(out.Direct, Finding{
 				Name: fileNode.Name, File: path, SourceID: fileNode.ID, Reason: "changed_file", Provenance: "diff",
@@ -205,9 +208,9 @@ type funcHit struct {
 	line int
 }
 
-func overlappingFuncs(funcs []source.Node, lines []int) []funcHit {
+func overlappingFuncs(funcs []source.Node, lines []int) ([]funcHit, bool) {
 	if len(funcs) == 0 || len(lines) == 0 {
-		return nil
+		return nil, len(lines) > 0
 	}
 	type span struct {
 		n   source.Node
@@ -226,11 +229,14 @@ func overlappingFuncs(funcs []source.Node, lines []int) []funcHit {
 	}
 	seen := map[string]struct{}{}
 	var out []funcHit
+	outside := false
 	for _, ln := range lines {
+		matched := false
 		for _, s := range spans {
 			if ln < s.n.Line || ln >= s.end {
 				continue
 			}
+			matched = true
 			if _, ok := seen[s.n.ID]; ok {
 				break
 			}
@@ -238,8 +244,11 @@ func overlappingFuncs(funcs []source.Node, lines []int) []funcHit {
 			out = append(out, funcHit{fn: s.n, line: ln})
 			break
 		}
+		if !matched {
+			outside = true
+		}
 	}
-	return out
+	return out, outside
 }
 
 func routeLabel(method, path string) string {

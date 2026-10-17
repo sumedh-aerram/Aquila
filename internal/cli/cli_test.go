@@ -26,6 +26,7 @@ import (
 	"github.com/sumedhaerram/aquila/internal/replay"
 	"github.com/sumedhaerram/aquila/internal/runs"
 	"github.com/sumedhaerram/aquila/internal/source"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 func shopSnapshotDir(t *testing.T) string {
@@ -736,7 +737,7 @@ func TestRunExperimentLocalShopMissing(t *testing.T) {
 	}
 }
 
-func TestRunExperimentLocalEnvPrepared(t *testing.T) {
+func TestRunExperimentPrintsBlockers(t *testing.T) {
 	pairHookMu.Lock()
 	defer pairHookMu.Unlock()
 	origP, origU, origD := preparePair, startPair, stopPair
@@ -783,6 +784,9 @@ func TestRunExperimentLocalEnvPrepared(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 	if strings.Contains(got, "overall=pass") || strings.Contains(got, "verdict=pass") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "blocker  same_target  "+gw.URL) {
 		t.Fatalf("%s", got)
 	}
 	if !stopped.Load() {
@@ -1247,4 +1251,65 @@ func impactAPI(t *testing.T, rep impact.Report) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func TestRunExperimentReadsGitStateBeforeReplay(t *testing.T) {
+	t.Parallel()
+	dir := shopSnapshotDir(t)
+	runGitInit(t, dir)
+	api := impactAPI(t, impact.Report{
+		Files:  []string{"a.go"},
+		Direct: []impact.Finding{{Name: "F", File: "a.go", SourceID: "f", Reason: "changed_lines"}},
+	})
+	var once sync.Once
+	corrupted := make(chan error, 1)
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() {
+			corrupted <- os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("garbage"), 0o644)
+		})
+		writeReplayJSON(w, map[string]any{"status": "ok"})
+	}))
+	defer gw.Close()
+	path := filepath.Join(t.TempDir(), "evidence.json")
+	var out strings.Builder
+	err := RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-base", gw.URL, "-patch", gw.URL,
+		"-fixture", "-n", "1", "-dir", dir, "-out", path,
+	}, strings.NewReader("diff --git a/x b/x\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-corrupted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("replay did not execute")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	art, err := evidence.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if art.BaselineSHA == "" || art.Dirty {
+		t.Fatalf("git state not captured before replay: %+v", art)
+	}
+}
+
+func TestWriteDecisionNoTrailingWhitespace(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	writeDecision(&out, nil, validate.Decision{Blockers: []validate.Blocker{{Code: validate.CodeNoFunctionBinding}}})
+	if !strings.Contains(out.String(), "blocker  no_function_binding\n") {
+		t.Fatalf("%q", out.String())
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.TrimRight(line, " \t") != line {
+			t.Fatalf("trailing whitespace: %q", line)
+		}
+	}
 }

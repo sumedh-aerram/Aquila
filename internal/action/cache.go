@@ -15,8 +15,12 @@ import (
 	"github.com/sumedhaerram/aquila/internal/plan"
 )
 
+const keyVersion = 2
+
 // Key identifies a replay action. It does not include wall-clock time.
 type Key struct {
+	V           int    `json:"v"`
+	JobID       string `json:"job_id"`
 	Kind        string `json:"kind"`
 	Baseline    string `json:"baseline"`
 	Patch       string `json:"patch"`
@@ -41,6 +45,8 @@ func FromLease(lease jobs.Lease) Key {
 		n = 1
 	}
 	return Key{
+		V:           keyVersion,
+		JobID:       lease.Job.ID,
 		Kind:        lease.Task.Kind,
 		Baseline:    lease.Job.Baseline,
 		Patch:       lease.Job.Patch,
@@ -76,7 +82,7 @@ func (c *Cache) file(key Key) string {
 
 // Get returns a cached step result.
 func (c *Cache) Get(ctx context.Context, key Key) (plan.StepResult, bool, error) {
-	if c == nil {
+	if c == nil || !Cacheable(key.Kind) {
 		return plan.StepResult{}, false, nil
 	}
 	raw, err := os.ReadFile(c.file(key))
@@ -103,7 +109,7 @@ func (c *Cache) Get(ctx context.Context, key Key) (plan.StepResult, bool, error)
 
 // Put stores res under key. Incomplete and failed verdicts are not cached.
 func (c *Cache) Put(ctx context.Context, key Key, res plan.StepResult) error {
-	if c == nil {
+	if c == nil || !Cacheable(key.Kind) {
 		return nil
 	}
 	if res.Verdict == "" || res.Verdict == "incomplete" || res.Verdict == "pass" || res.Verdict == "validated" {
@@ -133,3 +139,6 @@ func (c *Cache) Put(ctx context.Context, key Key, res plan.StepResult) error {
 	}
 	return os.Rename(name, c.file(key))
 }
+
+// Cacheable reports deterministic action kinds eligible for retry reuse.
+func Cacheable(kind string) bool { return kind == plan.KindBehavior || kind == plan.KindTests }

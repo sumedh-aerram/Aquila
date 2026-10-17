@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 const (
@@ -30,6 +31,7 @@ type Record struct {
 	WorkloadDigest string
 	ArtifactDigest string
 	Overall        string
+	Blockers       []validate.Blocker
 	Validated      bool
 	Artifact       evidence.Artifact
 }
@@ -62,7 +64,8 @@ func FromArtifact(a evidence.Artifact) (Record, error) {
 		WorkloadDigest: a.WorkloadDigest,
 		ArtifactDigest: a.ArtifactDigest,
 		Overall:        a.Result.Overall,
-		Validated:      a.Validated,
+		Validated:      a.Decision().Validated,
+		Blockers:       a.Decision().Blockers,
 		Artifact:       a,
 	}, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/plan"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 // Memory is an in-process Store for tests.
@@ -275,6 +276,9 @@ func (m *Memory) Cancel(ctx context.Context, id string) (Job, error) {
 
 func cloneJob(j Job) Job {
 	cp := j
+	cp.Changes.Bound = append([]string(nil), j.Changes.Bound...)
+	cp.Changes.Unanalyzed = append([]string(nil), j.Changes.Unanalyzed...)
+	cp.Blockers = append([]validate.Blocker(nil), j.Blockers...)
 	cp.Tasks = append([]Task(nil), j.Tasks...)
 	cp.Workload = append([]Step(nil), j.Workload...)
 	return cp

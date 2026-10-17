@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -205,4 +206,17 @@ func runArtifact(t *testing.T, overall string) evidence.Artifact {
 		Plan:        plan.DAG{},
 		Result:      plan.Evidence{Overall: overall, Notes: []string{"not validated"}},
 	})
+}
+
+func TestCreateRunRejectsLegacySchema(t *testing.T) {
+	raw, err := os.ReadFile("../evidence/testdata/v1_shop_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(config.Config{Server: config.ServerConfig{Addr: ":0", ShutdownTimeout: time.Second}}, nil, Dependencies{Runs: runs.NewMemory()})
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(raw)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "legacy schema") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }

@@ -3,7 +3,9 @@ package runs
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -65,6 +67,9 @@ func TestPostgresInsertIsIdempotent(t *testing.T) {
 	for _, r := range listed {
 		if r.ID == first.ID {
 			found = true
+			if !slices.Equal(r.Blockers, first.Blockers) {
+				t.Fatalf("list blockers=%+v, want %+v", r.Blockers, first.Blockers)
+			}
 			if r.Artifact.Schema != "" {
 				t.Fatal("list must omit artifact bodies")
 			}
@@ -82,5 +87,43 @@ func TestPostgresRejectsValidated(t *testing.T) {
 	_, err := p.Insert(t.Context(), Record{Artifact: a})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestPostgresLegacyRowNotValidated(t *testing.T) {
+	p := openTestPostgres(t)
+	a := legacyArtifact(t)
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := a.ArtifactDigest[:idLen]
+	_, err = p.pool.Exec(t.Context(), `INSERT INTO aquila.runs (id,recorded_at,baseline_sha,dirty,workload_digest,artifact_digest,overall,validated,artifact) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT(id) DO UPDATE SET validated=true,artifact=EXCLUDED.artifact`, id, a.Recorded, a.BaselineSHA, a.Dirty, a.WorkloadDigest, a.ArtifactDigest, a.Result.Overall, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.runs WHERE id=$1`, id) })
+	got, err := p.Get(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Validated || len(got.Blockers) != 1 || got.Blockers[0].Code != "legacy_schema" {
+		t.Fatalf("%+v", got)
+	}
+	list, err := p.List(t.Context(), 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range list {
+		if r.ID == id {
+			found = true
+			if r.Validated {
+				t.Fatal("legacy listed validated")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("legacy row missing")
 	}
 }

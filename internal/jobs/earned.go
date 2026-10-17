@@ -13,17 +13,18 @@ func refreshJob(job *Job) {
 	if job.Canceled {
 		job.Status = StatusCanceled
 		job.Validated = false
-		return
+	} else {
+		job.Status = jobStatus(job.Tasks)
 	}
-	job.Status = jobStatus(job.Tasks)
-	job.Validated = jobEarned(*job)
+	d := jobDecision(*job)
+	job.Validated, job.Blockers = d.Validated, d.Blockers
 }
 
-func jobEarned(job Job) bool {
+func jobDecision(job Job) validate.Decision {
 	if job.Canceled || job.Status != StatusComplete {
-		return false
+		return validate.Decision{Blockers: []validate.Blocker{{Code: validate.CodeStepFailed, Subject: "job:" + job.Status}}}
 	}
-	return validate.Earned(validate.Input{
+	return validate.Decide(validate.Input{
 		Dirty:       job.Dirty,
 		BaselineSHA: job.BaselineSHA,
 		Baseline:    job.Baseline,
@@ -31,7 +32,7 @@ func jobEarned(job Job) bool {
 		Plan:        job.Plan,
 		Result:      jobEvidence(job),
 		Impacted:    job.Impacted,
-		Direct:      job.Direct,
+		Changes:     job.Changes,
 		Workload:    Workload(job).Steps,
 	})
 }
@@ -105,6 +106,7 @@ func failDeadline(job *Job, now time.Time) bool {
 		}
 	}
 	job.Status = StatusFailed
-	job.Validated = false
+	d := jobDecision(*job)
+	job.Validated, job.Blockers = d.Validated, d.Blockers
 	return true
 }

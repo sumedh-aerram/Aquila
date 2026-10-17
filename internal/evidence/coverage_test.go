@@ -97,6 +97,7 @@ func earnedInput(work ...replay.Step) Input {
 		Workload:    replay.Workload{Steps: work},
 		Impact: impact.Report{
 			Files:   []string{"a.go"},
+			Direct:  []impact.Finding{{Name: "Charge", File: "a.go", SourceID: "charge", Reason: "changed_lines"}},
 			Runtime: []impact.Finding{{Name: "Charge", Route: "POST /checkout"}},
 		},
 		Plan: plan.DAG{Steps: []plan.Step{
@@ -107,6 +108,7 @@ func earnedInput(work ...replay.Step) Input {
 		Result: plan.Evidence{Overall: replay.VerdictMatch, Steps: []plan.StepResult{
 			{ID: "env", Kind: plan.KindEnv, Verdict: plan.VerdictPrepared},
 			answered(work...).Steps[0],
+			{ID: "concurrency", Kind: plan.KindConcurrency, Verdict: replay.VerdictMatch},
 			{ID: "latency", Kind: plan.KindLatency, Verdict: plan.VerdictSamples, Latency: []replay.StepLatency{{Method: "GET", Path: "/healthz", Baseline: lat, Patch: lat}}},
 		}},
 	}

@@ -31,7 +31,7 @@ func ExecuteWith(ctx context.Context, lease jobs.Lease, cache *action.Cache) (pl
 		return plan.StepResult{}, fmt.Errorf("worker: operator task")
 	}
 	key := action.FromLease(lease)
-	if cache != nil {
+	if cache != nil && action.Cacheable(lease.Task.Kind) {
 		hit, ok, err := cache.Get(ctx, key)
 		if err != nil {
 			return plan.StepResult{}, err
@@ -61,7 +61,7 @@ func ExecuteWith(ctx context.Context, lease jobs.Lease, cache *action.Cache) (pl
 	if out.Verdict == "pass" || out.Verdict == "validated" {
 		return plan.StepResult{}, fmt.Errorf("worker: result cannot be a pass")
 	}
-	if cache != nil {
+	if cache != nil && action.Cacheable(lease.Task.Kind) {
 		if err := cache.Put(ctx, key, out); err != nil {
 			return plan.StepResult{}, err
 		}

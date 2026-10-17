@@ -11,6 +11,7 @@ import (
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/replay"
+	"github.com/sumedhaerram/aquila/internal/validate"
 )
 
 // Postgres stores experiment runs in aquila.runs.
@@ -41,7 +42,8 @@ WHERE id = $1
 
 const listSQL = `
 SELECT id, recorded_at, baseline_sha, dirty, workload_digest, artifact_digest, overall, validated,
-       COALESCE(artifact->>'service', '')
+       COALESCE(artifact->>'service', ''), COALESCE(artifact->>'schema', ''),
+       COALESCE(artifact->'blockers', '[]'::jsonb)
 FROM aquila.runs
 WHERE ($2 = '' OR COALESCE(artifact->>'service', '') = $2)
 ORDER BY recorded_at DESC, id DESC
@@ -103,18 +105,15 @@ func (p *Postgres) Get(ctx context.Context, id string) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("get run: %w", err)
 	}
-	if rec.Validated && rec.Overall != replay.VerdictMatch {
-		return Record{}, fmt.Errorf("runs: stored validated claim")
-	}
 	var a evidence.Artifact
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return Record{}, fmt.Errorf("runs: %w", err)
 	}
-	if err := evidence.Check(a); err != nil {
+	if err := evidence.Verify(a); err != nil {
 		return Record{}, err
 	}
 	rec.Artifact = a
-	rec.Validated = a.Validated
+	rec.Validated, rec.Blockers = a.Decision().Validated, a.Decision().Blockers
 	rec.Recorded = rec.Recorded.UTC()
 	return rec, nil
 }
@@ -133,12 +132,23 @@ func (p *Postgres) List(ctx context.Context, limit int, service string) ([]Recor
 	out := make([]Record, 0, limit)
 	for rows.Next() {
 		var rec Record
+		var schema string
+		var blockers []byte
 		if err := rows.Scan(
 			&rec.ID, &rec.Recorded, &rec.BaselineSHA, &rec.Dirty,
 			&rec.WorkloadDigest, &rec.ArtifactDigest, &rec.Overall, &rec.Validated,
-			&rec.Service,
+			&rec.Service, &schema, &blockers,
 		); err != nil {
 			return nil, fmt.Errorf("list runs: %w", err)
+		}
+		rec.Validated = rec.Validated && schema == evidence.SchemaV2
+		switch schema {
+		case evidence.SchemaV1:
+			rec.Blockers = validate.Legacy().Blockers
+		case evidence.SchemaV2:
+			if err := json.Unmarshal(blockers, &rec.Blockers); err != nil {
+				return nil, fmt.Errorf("list runs: blockers: %w", err)
+			}
 		}
 		if rec.Validated && rec.Overall != replay.VerdictMatch {
 			return nil, fmt.Errorf("runs: stored validated claim")

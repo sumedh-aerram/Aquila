@@ -81,3 +81,64 @@ func TestFromDiffBareFilenameDoesNotSuffixMatch(t *testing.T) {
 		t.Fatalf("guessed runtime=%+v", rep.Runtime)
 	}
 }
+
+func TestClassify(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, path, reason string
+		bound, unanalyzed  bool
+	}{
+		{"doc only", "README.md", "", false, false},
+		{"requirements", "requirements.txt", "", false, true},
+		{"cmake", "CMakeLists.txt", "", false, true},
+		{"constraints", "constraints.txt", "", false, true},
+		{"test only", "a_test.go", "changed_lines", false, false},
+		{"dockerfile", "Dockerfile", "", false, true},
+		{"changed lines", "a.go", "changed_lines", true, false},
+		{"changed file", "a.go", "changed_file", false, true},
+		{"no findings", "a.go", "", false, true},
+		{"mixed findings", "a.go", "mixed", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := Report{Files: []string{tc.path}}
+			if tc.reason != "" {
+				rep.Direct = []Finding{{File: tc.path, SourceID: "f", Reason: tc.reason}}
+			}
+			if tc.reason == "mixed" {
+				rep.Direct = append(rep.Direct, Finding{File: tc.path, SourceID: "g", Reason: "changed_lines"})
+			}
+			got := Classify(rep)
+			if (len(got.Bound) > 0) != tc.bound || (len(got.Unanalyzed) > 0) != tc.unanalyzed {
+				t.Fatalf("%+v", got)
+			}
+			if tc.bound && got.Bound[0] != "f" {
+				t.Fatalf("%+v", got)
+			}
+			if tc.unanalyzed && got.Unanalyzed[0] != tc.path {
+				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
+
+func TestInert(t *testing.T) {
+	t.Parallel()
+	for _, p := range []string{"README.md", "guide.rst", "LICENSE", "LICENSE-MIT",
+		"NOTICE", "NOTICE.txt", "AUTHORS", "AUTHORS.txt", ".github/CODEOWNERS",
+		"CHANGELOG", "CHANGELOG.txt", "a_test.go"} {
+		t.Run(strings.ToLower(p), func(t *testing.T) {
+			if !Inert(p) {
+				t.Fatal(p)
+			}
+		})
+	}
+	for _, p := range []string{"Dockerfile", "compose.yaml", "go.mod", "a.go", "schema.sql",
+		"notes.txt", "requirements.txt", "constraints.txt", "CMakeLists.txt"} {
+		t.Run(strings.ToLower(p), func(t *testing.T) {
+			if Inert(p) {
+				t.Fatal(p)
+			}
+		})
+	}
+}

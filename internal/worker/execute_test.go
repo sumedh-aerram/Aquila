@@ -3,6 +3,7 @@ package worker
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sumedhaerram/aquila/internal/action"
@@ -96,6 +97,7 @@ func TestExecuteCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lease.Task.Kind = plan.KindBehavior
 	first, err := ExecuteWith(t.Context(), lease, cache)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +107,7 @@ func TestExecuteCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Verdict != second.Verdict || second.Verdict != plan.VerdictPrepared {
+	if first.Verdict != second.Verdict || second.Verdict != replay.VerdictMatch {
 		t.Fatalf("%+v %+v", first, second)
 	}
 }
@@ -162,5 +164,82 @@ func TestExecuteEnvProbesJobHealthPath(t *testing.T) {
 	lease.Job.Plan.HealthPath = ""
 	if action.Digest(def) == action.Digest(action.FromLease(lease)) {
 		t.Fatal("cache key must differ by health path")
+	}
+}
+
+func TestCacheNotSharedAcrossJobs(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"value":"ok"}`))
+	}))
+	defer gw.Close()
+	cache, err := action.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := jobs.Lease{
+		Job: jobs.Job{
+			ID: "first", Baseline: gw.URL, Patch: gw.URL,
+			Workload: []jobs.Step{{Method: "GET", Path: "/"}},
+		},
+		Task: jobs.Task{Kind: plan.KindBehavior, PlanID: "behavior"},
+		N:    1,
+	}
+	first, err := ExecuteWith(t.Context(), lease, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := calls.Load()
+	lease.Job.ID = "second"
+	second, err := ExecuteWith(t.Context(), lease, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Steps) != 1 || len(second.Steps) != 1 {
+		t.Fatalf("%+v %+v", first, second)
+	}
+	if calls.Load() <= n {
+		t.Fatal("second job reused cache")
+	}
+}
+
+func TestCacheReusedOnRetry(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer gw.Close()
+	cache, err := action.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := jobs.Lease{
+		Job: jobs.Job{
+			ID: "same", Baseline: gw.URL, Patch: gw.URL,
+			Workload: []jobs.Step{{Method: "GET", Path: "/"}},
+		},
+		Task: jobs.Task{Kind: plan.KindBehavior, PlanID: "behavior"},
+		N:    1,
+	}
+	if _, err := ExecuteWith(t.Context(), lease, cache); err != nil {
+		t.Fatal(err)
+	}
+	n := calls.Load()
+	if n == 0 {
+		t.Fatal("did not execute")
+	}
+	lease.Attempt = "retry"
+	lease.Fence = 2
+	if _, err := ExecuteWith(t.Context(), lease, cache); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != n {
+		t.Fatal("retry did not reuse cache")
 	}
 }

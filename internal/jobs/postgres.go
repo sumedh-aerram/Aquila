@@ -421,7 +421,8 @@ func decodeJob(raw []byte) (Job, error) {
 	if err := json.Unmarshal(raw, &job); err != nil {
 		return Job{}, fmt.Errorf("jobs: %w", err)
 	}
-	job.Validated = jobEarned(job)
+	d := jobDecision(job)
+	job.Validated, job.Blockers = d.Validated, d.Blockers
 	return job, nil
 }
 
