@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/jobs"
@@ -73,7 +72,7 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 		}
 	}
 	dag = plan.WithHealthPath(dag, *health)
-	sha, dirty, err := gitrev.State(ctx, *dir)
+	baselineRev, patchRev, err := declaredRevisions(ctx, *dir)
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
@@ -85,8 +84,8 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 		Baseline:    *base,
 		Patch:       *patch,
 		Service:     ingest.ClipService(*service),
-		BaselineSHA: sha,
-		Dirty:       dirty,
+		BaselineRev: baselineRev,
+		PatchRev:    patchRev,
 		Workload:    w,
 		Plan:        dag,
 		Impacted:    impact.RuntimeRoutes(rep),
@@ -150,6 +149,9 @@ func RunJobs(ctx context.Context, args []string, stdout io.Writer) error {
 				val = "  validated"
 			}
 			writef(stdout, "  %s  %s  tasks=%d%s%s\n", j.ID, j.Status, len(j.Tasks), svc, val)
+			for _, b := range j.Blockers {
+				writef(stdout, "    blocker  %s\n", b.String())
+			}
 		}
 		return nil
 	case len(rest) == 2 && rest[0] == "cancel":

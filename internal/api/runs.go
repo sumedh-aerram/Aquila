@@ -15,6 +15,7 @@ import (
 )
 
 type runCreated struct {
+	AttestedBy     string             `json:"attested_by"`
 	ID             string             `json:"id"`
 	Overall        string             `json:"overall"`
 	Blockers       []validate.Blocker `json:"blockers,omitempty"`
@@ -30,6 +31,7 @@ type runListResponse struct {
 }
 
 type runGetResponse struct {
+	AttestedBy     string             `json:"attested_by"`
 	ID             string             `json:"id"`
 	Overall        string             `json:"overall"`
 	Blockers       []validate.Blocker `json:"blockers,omitempty"`
@@ -60,7 +62,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid artifact: " + clipQuery(err.Error(), 200)})
 		return
 	}
-	if a.Schema != evidence.SchemaV2 {
+	if a.Schema != evidence.SchemaV3 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "legacy schema"})
 		return
 	}
@@ -137,7 +139,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, runGetResponse{
+	writeJSON(w, http.StatusOK, runGetResponse{AttestedBy: "client",
 		ID:             rec.ID,
 		Overall:        rec.Overall,
 		Validated:      rec.Validated,
@@ -150,7 +152,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func summaryFrom(rec runs.Record) runCreated {
-	return runCreated{
+	return runCreated{AttestedBy: "client",
 		ID:             rec.ID,
 		Overall:        rec.Overall,
 		Validated:      rec.Validated,

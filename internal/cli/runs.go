@@ -15,6 +15,7 @@ import (
 )
 
 type storedRun struct {
+	AttestedBy     string             `json:"attested_by"`
 	ID             string             `json:"id"`
 	Overall        string             `json:"overall"`
 	Blockers       []validate.Blocker `json:"blockers,omitempty"`
@@ -100,6 +101,9 @@ func getRun(ctx context.Context, c *Client, id string, stdout io.Writer) error {
 		return err
 	}
 	writef(stdout, "run       %s\n", formatStored(body))
+	if body.AttestedBy != "" {
+		writef(stdout, "attested  %s (uploaded evidence)\n", body.AttestedBy)
+	}
 	if body.Artifact.Schema != "" {
 		writeEvidence(stdout, body.Artifact.Result)
 	}
@@ -117,6 +121,9 @@ func postRun(ctx context.Context, c *Client, a evidence.Artifact, stdout io.Writ
 		return err
 	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
+	if out.AttestedBy != "" {
+		writef(stdout, "attested  %s (uploaded evidence)\n", out.AttestedBy)
+	}
 	writeDecision(stdout, nil, validate.Decision{Validated: out.Validated, Blockers: out.Blockers})
 	return nil
 }
@@ -144,6 +151,9 @@ func recordRun(ctx context.Context, api string, stdout io.Writer, a evidence.Art
 		return
 	}
 	writef(stdout, "run       id=%s  stored\n", out.ID)
+	if out.AttestedBy != "" {
+		writef(stdout, "attested  %s (uploaded evidence)\n", out.AttestedBy)
+	}
 	if out.Validated != a.Decision().Validated {
 		writef(stdout, "validated  %t  (server re-derived; local said %t)\n", out.Validated, a.Decision().Validated)
 	}

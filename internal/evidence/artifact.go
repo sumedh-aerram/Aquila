@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -18,7 +19,8 @@ import (
 )
 
 const (
-	// SchemaV2 identifies evidence graded with explicit blockers.
+	// Evidence schema versions retain historical digests and distinguish strict writes.
+	SchemaV3 = "aquila.evidence.v3"
 	SchemaV2 = "aquila.evidence.v2"
 	SchemaV1 = "aquila.evidence.v1"
 	MaxBytes = 1 << 20
@@ -27,6 +29,8 @@ const (
 // Artifact records one local experiment, including its classified changes,
 // executed results and validation decision.
 type Artifact struct {
+	BaselineRev    gitrev.Revision    `json:"baseline_rev,omitzero"`
+	PatchRev       gitrev.Revision    `json:"patch_rev,omitzero"`
 	Schema         string             `json:"schema"`
 	Recorded       time.Time          `json:"recorded_at"`
 	Baseline       string             `json:"baseline"`
@@ -68,11 +72,11 @@ type ImpactSummary struct {
 
 // Input is the executed experiment pieces needed to persist evidence.
 type Input struct {
+	BaselineRev gitrev.Revision
+	PatchRev    gitrev.Revision
 	Now         time.Time
 	Baseline    string
 	Patch       string
-	BaselineSHA string
-	Dirty       bool
 	Service     string
 	Workload    replay.Workload
 	Impact      impact.Report
@@ -87,12 +91,14 @@ func Build(in Input) Artifact {
 		now = time.Now().UTC().Truncate(time.Second)
 	}
 	a := Artifact{
-		Schema:      SchemaV2,
+		Schema:      SchemaV3,
 		Recorded:    now,
 		Baseline:    in.Baseline,
 		Patch:       in.Patch,
-		BaselineSHA: in.BaselineSHA,
-		Dirty:       in.Dirty,
+		BaselineSHA: in.BaselineRev.Commit,
+		BaselineRev: in.BaselineRev,
+		PatchRev:    in.PatchRev,
+		Dirty:       in.PatchRev.Dirty,
 		Service:     clipService(in.Service),
 		Workload:    requests(in.Workload),
 		Impact:      summarizeImpact(in.Impact),
@@ -170,32 +176,37 @@ func Decode(r io.Reader) (Artifact, error) {
 	if err := dec.Decode(&a); err != nil {
 		return Artifact{}, fmt.Errorf("evidence: %w", err)
 	}
-	if err := Check(a); err != nil {
+	check := Verify
+	if a.Schema == SchemaV3 {
+		check = Check
+	}
+	if err := check(a); err != nil {
 		return Artifact{}, err
 	}
 	return a, nil
 }
 
-// Check verifies integrity and requires v2 validation claims to agree with policy.
+// Check requires current-schema evidence whose claims agree with grading policy.
 func Check(a Artifact) error {
 	if err := Verify(a); err != nil {
 		return err
 	}
-	if a.Schema == SchemaV2 {
-		d := a.Decision()
-		if a.Validated != d.Validated {
-			return fmt.Errorf("evidence: validated is unearned")
-		}
-		if !slices.Equal(a.Blockers, d.Blockers) {
-			return fmt.Errorf("evidence: blockers do not match decision")
-		}
+	if a.Schema != SchemaV3 {
+		return fmt.Errorf("evidence: writes require schema %s", SchemaV3)
+	}
+	d := a.Decision()
+	if a.Validated != d.Validated {
+		return fmt.Errorf("evidence: validated is unearned")
+	}
+	if !slices.Equal(a.Blockers, d.Blockers) {
+		return fmt.Errorf("evidence: blockers do not match decision")
 	}
 	return nil
 }
 
 // Verify checks schema, verdict and content integrity without applying policy.
 func Verify(a Artifact) error {
-	if a.Schema != SchemaV1 && a.Schema != SchemaV2 {
+	if a.Schema != SchemaV1 && a.Schema != SchemaV2 && a.Schema != SchemaV3 {
 		return fmt.Errorf("evidence: unsupported schema %q", a.Schema)
 	}
 	switch strings.ToLower(strings.TrimSpace(a.Result.Overall)) {
@@ -207,10 +218,10 @@ func Verify(a Artifact) error {
 	default:
 		return fmt.Errorf("evidence: unknown overall %q", a.Result.Overall)
 	}
-	if (a.Schema == SchemaV2 || a.WorkloadDigest != "") && a.WorkloadDigest != digestWorkload(a.Workload) {
+	if (a.Schema != SchemaV1 || a.WorkloadDigest != "") && a.WorkloadDigest != digestWorkload(a.Workload) {
 		return fmt.Errorf("evidence: workload digest mismatch")
 	}
-	if (a.Schema == SchemaV2 || a.ArtifactDigest != "") && a.ArtifactDigest != digestArtifact(a) {
+	if (a.Schema != SchemaV1 || a.ArtifactDigest != "") && a.ArtifactDigest != digestArtifact(a) {
 		return fmt.Errorf("evidence: artifact digest mismatch")
 	}
 	return nil
@@ -221,9 +232,15 @@ func (a Artifact) Decision() validate.Decision {
 	if a.Schema == SchemaV1 {
 		return validate.Legacy()
 	}
+	if a.Schema == SchemaV2 {
+		return validate.Decision{Blockers: []validate.Blocker{
+			{Code: validate.CodeUnverifiedRevision, Subject: "baseline"},
+			{Code: validate.CodeUnverifiedRevision, Subject: "patch"},
+		}}
+	}
 	in := validate.Input{
-		Dirty:       a.Dirty,
-		BaselineSHA: a.BaselineSHA,
+		BaselineRev: a.BaselineRev,
+		PatchRev:    a.PatchRev,
 		Baseline:    a.Baseline,
 		Patch:       a.Patch,
 		Plan:        a.Plan,

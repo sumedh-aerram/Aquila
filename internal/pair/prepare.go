@@ -6,18 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/sumedhaerram/aquila/internal/diff"
 	"github.com/sumedhaerram/aquila/internal/gitrev"
 )
 
 const (
-	maxCopyBytes = 80 << 20
 	defaultBase  = 18180
 	defaultPatch = 18280
 )
@@ -36,43 +31,37 @@ type Side struct {
 
 // Env is a baseline/patch pair. Status is prepared, never running.
 type Env struct {
-	ID             string `json:"id"`
-	Root           string `json:"root"`
-	Status         string `json:"status"`
-	BaselineSHA    string `json:"baseline_sha,omitempty"`
-	DirtyShop      bool   `json:"dirty_shop"`
-	BaselineDigest string `json:"baseline_digest"`
-	PatchDigest    string `json:"patch_digest"`
-	ComposeFile    string `json:"compose_file"`
-	Baseline       Side   `json:"baseline"`
-	Patch          Side   `json:"patch"`
+	ID             string          `json:"id"`
+	Root           string          `json:"root"`
+	Status         string          `json:"status"`
+	BaselineRev    gitrev.Revision `json:"baseline_rev"`
+	PatchRev       gitrev.Revision `json:"patch_rev"`
+	BaselineDigest string          `json:"baseline_digest"`
+	PatchDigest    string          `json:"patch_digest"`
+	ComposeFile    string          `json:"compose_file"`
+	Baseline       Side            `json:"baseline"`
+	Patch          Side            `json:"patch"`
 }
 
 // PrepareOpts is the input for creating an environment pair.
 type PrepareOpts struct {
-	ShopDir   string
+	Repo      gitrev.Repo
+	Baseline  gitrev.Revision
+	Patch     gitrev.Revision
 	Parent    string
-	Diff      []byte
 	BasePort  int
 	PatchPort int
 	Replace   bool
 }
 
-// Prepare copies the shop twice, applies the diff only to patch, and writes
-// an equivalent compose file for both sides. It does not start containers.
+// Prepare materializes the baseline and patch trees and writes equivalent shop
+// compose environments. It does not start containers.
 func Prepare(ctx context.Context, opts PrepareOpts) (Env, error) {
 	if err := ctx.Err(); err != nil {
 		return Env{}, err
 	}
-	if len(opts.Diff) == 0 {
-		return Env{}, fmt.Errorf("pair: empty diff")
-	}
-	shop, err := filepath.Abs(opts.ShopDir)
-	if err != nil {
-		return Env{}, fmt.Errorf("pair: shop: %w", err)
-	}
-	if err := requireShop(shop); err != nil {
-		return Env{}, err
+	if opts.Baseline.Tree == "" || opts.Patch.Tree == "" {
+		return Env{}, fmt.Errorf("pair: missing revision tree")
 	}
 	parent, err := filepath.Abs(opts.Parent)
 	if err != nil {
@@ -90,12 +79,8 @@ func Prepare(ctx context.Context, opts PrepareOpts) (Env, error) {
 		return Env{}, err
 	}
 
-	baseDigest, err := digestDir(shop)
-	if err != nil {
-		return Env{}, err
-	}
-	patchDigest := sha256Hex(opts.Diff)
-	id := sha256Hex([]byte(baseDigest + ":" + patchDigest))[:12]
+	sum := sha256.Sum256([]byte(opts.Baseline.Tree + ":" + opts.Patch.Tree))
+	id := hex.EncodeToString(sum[:])[:12]
 	root := filepath.Join(parent, id)
 	if _, err := os.Stat(root); err == nil {
 		if !opts.Replace {
@@ -117,14 +102,16 @@ func Prepare(ctx context.Context, opts PrepareOpts) (Env, error) {
 
 	baseDir := filepath.Join(root, "baseline")
 	patchDir := filepath.Join(root, "patch")
-	if err := copyDir(shop, baseDir); err != nil {
+	if err := opts.Repo.Materialize(ctx, opts.Baseline.Tree, baseDir); err != nil {
 		return Env{}, err
 	}
-	if err := copyDir(shop, patchDir); err != nil {
+	if err := opts.Repo.Materialize(ctx, opts.Patch.Tree, patchDir); err != nil {
 		return Env{}, err
 	}
-	if err := diff.Apply(patchDir, opts.Diff); err != nil {
-		return Env{}, err
+	for _, dir := range []string{baseDir, patchDir} {
+		if err := requireShop(dir); err != nil {
+			return Env{}, err
+		}
 	}
 
 	composePath := filepath.Join(root, "docker-compose.yaml")
@@ -143,18 +130,14 @@ func Prepare(ctx context.Context, opts PrepareOpts) (Env, error) {
 		return Env{}, err
 	}
 
-	sha, dirty, err := gitrev.State(ctx, shop)
-	if err != nil {
-		return Env{}, err
-	}
 	env := Env{
 		ID:             id,
 		Root:           root,
 		Status:         "prepared",
-		BaselineSHA:    sha,
-		DirtyShop:      dirty,
-		BaselineDigest: baseDigest,
-		PatchDigest:    patchDigest,
+		BaselineRev:    opts.Baseline,
+		PatchRev:       opts.Patch,
+		BaselineDigest: opts.Baseline.Tree,
+		PatchDigest:    opts.Patch.Tree,
 		ComposeFile:    composePath,
 		Baseline: Side{
 			Role:        "baseline",
@@ -217,116 +200,4 @@ func checkPorts(base, patch int) error {
 func writeEnvFile(path, context string, port int) error {
 	body := fmt.Sprintf("SHOP_CONTEXT=%s\nGATEWAY_PORT=%d\n", context, port)
 	return os.WriteFile(path, []byte(body), 0o644)
-}
-
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
-func digestDir(root string) (string, error) {
-	h := sha256.New()
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if skipName(d.Name()) || skipRel(rel) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("pair: refusing symlink %s", rel)
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		_, _ = io.WriteString(h, rel)
-		_, _ = h.Write([]byte{0})
-		_, _ = h.Write(raw)
-		_, _ = h.Write([]byte{0})
-		return nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("pair: digest: %w", err)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func copyDir(src, dst string) error {
-	var total int64
-	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if skipName(d.Name()) || skipRel(filepath.ToSlash(rel)) {
-			if d.IsDir() && rel != "." {
-				return filepath.SkipDir
-			}
-			if !d.IsDir() {
-				return nil
-			}
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("pair: refusing symlink %s", rel)
-		}
-		st, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += st.Size()
-		if total > maxCopyBytes {
-			return fmt.Errorf("pair: shop exceeds copy cap")
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = in.Close() }()
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, st.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		defer func() { _ = out.Close() }()
-		_, err = io.Copy(out, in)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("pair: copy: %w", err)
-	}
-	return nil
-}
-
-func skipName(name string) bool {
-	switch name {
-	case ".git", "out", "bin", "node_modules":
-		return true
-	default:
-		return false
-	}
-}
-
-func skipRel(rel string) bool {
-	return rel == ".git" || strings.HasPrefix(rel, ".git/")
 }

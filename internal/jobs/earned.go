@@ -25,8 +25,8 @@ func jobDecision(job Job) validate.Decision {
 		return validate.Decision{Blockers: []validate.Blocker{{Code: validate.CodeStepFailed, Subject: "job:" + job.Status}}}
 	}
 	return validate.Decide(validate.Input{
-		Dirty:       job.Dirty,
-		BaselineSHA: job.BaselineSHA,
+		BaselineRev: job.BaselineRev,
+		PatchRev:    job.PatchRev,
 		Baseline:    job.Baseline,
 		Patch:       job.Patch,
 		Plan:        job.Plan,

@@ -17,32 +17,29 @@ func slurpDiff(stdin io.Reader, path string) ([]byte, error) {
 }
 
 func resolveDiff(ctx context.Context, stdin io.Reader, path, dir string) ([]byte, string, error) {
-	if path != "" {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, "file", err
-		}
-		if err := checkDiffBytes(raw); err != nil {
-			return nil, "file", err
-		}
-		return raw, "file", nil
-	}
-	if !stdinInteractive(stdin) {
-		raw, err := io.ReadAll(io.LimitReader(stdin, int64(diff.MaxBytes)+1))
-		if err != nil {
-			return nil, "stdin", err
-		}
-		if len(raw) > 0 {
-			if err := checkDiffBytes(raw); err != nil {
-				return nil, "stdin", err
-			}
-			return raw, "stdin", nil
-		}
+	raw, origin, err := readDiff(stdin, path)
+	if err != nil || origin != "worktree" {
+		return raw, origin, err
 	}
 	if dir == "" {
 		return nil, "worktree", fmt.Errorf("empty diff")
 	}
-	raw, err := gitrev.UnifiedDiff(ctx, dir)
+	repo, err := gitrev.Open(ctx, dir)
+	raw = nil
+	if err == nil {
+		base, headErr := repo.Head(ctx)
+		err = headErr
+		if err == nil {
+			patch, snapErr := repo.SnapshotWorktreeAt(ctx, base)
+			err = snapErr
+			if err == nil {
+				raw, err = repo.DiffTrees(ctx, base.Commit, patch.Commit)
+			}
+		}
+		if err != nil {
+			raw, err = repo.PlainDiff(ctx)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, gitrev.ErrNotGit) {
 			return nil, "worktree", fmt.Errorf("no local changes (not a git work tree); pass -f or a unified diff on stdin")
@@ -94,4 +91,30 @@ func diffPath(file string, rest []string) (string, error) {
 		return "", fmt.Errorf("unexpected argument %q", rest[1])
 	}
 	return "", nil
+}
+
+func readDiff(stdin io.Reader, path string) ([]byte, string, error) {
+	if path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, "file", err
+		}
+		if err := checkDiffBytes(raw); err != nil {
+			return nil, "file", err
+		}
+		return raw, "file", nil
+	}
+	if !stdinInteractive(stdin) {
+		raw, err := io.ReadAll(io.LimitReader(stdin, int64(diff.MaxBytes)+1))
+		if err != nil {
+			return nil, "stdin", err
+		}
+		if len(raw) > 0 {
+			if err := checkDiffBytes(raw); err != nil {
+				return nil, "stdin", err
+			}
+			return raw, "stdin", nil
+		}
+	}
+	return nil, "worktree", nil
 }

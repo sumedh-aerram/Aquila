@@ -17,6 +17,12 @@ func Markdown(a Artifact) string {
 		b.WriteString("recorded: " + a.Recorded.UTC().Format("2006-01-02T15:04:05Z") + "\n")
 	}
 	b.WriteString("overall: " + a.Result.Overall + "\n")
+	if a.BaselineRev.Tree != "" {
+		b.WriteString("baseline tree: " + a.BaselineRev.Tree + " source=" + a.BaselineRev.Source + "\n")
+	}
+	if a.PatchRev.Tree != "" {
+		b.WriteString("patch tree: " + a.PatchRev.Tree + " source=" + a.PatchRev.Source + "\n")
+	}
 	for _, bkr := range a.Decision().Blockers {
 		b.WriteString("blocker: " + bkr.String() + "\n")
 	}

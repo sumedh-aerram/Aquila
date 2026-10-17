@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -32,7 +33,7 @@ func TestBuildOmitsBodiesAndIsNeverValidated(t *testing.T) {
 			Notes:   []string{"not validated. no pass threshold. no impacted tests."},
 		},
 	})
-	if a.Validated || a.Schema != SchemaV2 {
+	if a.Validated || a.Schema != SchemaV3 {
 		t.Fatalf("%+v", a)
 	}
 	raw, err := Marshal(a)
@@ -59,11 +60,19 @@ func TestBuildEarnsValidated(t *testing.T) {
 		Patch:    replay.Summary{N: 20, HasP95: true},
 	}}
 	a := Build(Input{
-		Now:         time.Date(2026, 9, 23, 20, 0, 0, 0, time.UTC),
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
-		BaselineSHA: "abc123",
-		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
+		Now:      time.Date(2026, 9, 23, 20, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		BaselineRev: gitrev.Revision{
+			Commit: "abc123",
+			Tree:   "base",
+			Source: gitrev.SourceBuilt,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceBuilt,
+		},
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz"}}},
 		Impact: impact.Report{
 			Files:   []string{"a.go"},
 			Direct:  []impact.Finding{{Name: "F", File: "a.go", SourceID: "f", Reason: "changed_lines"}},
@@ -236,13 +245,14 @@ func sampleDiffer(t *testing.T) Artifact {
 
 func legacyShopArtifact(t *testing.T) Artifact {
 	t.Helper()
-	in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
-	a := Build(in)
-	a.Schema = SchemaV1
-	a.Impact.Changes = impact.Changes{}
-	a.Blockers = nil
-	a.Validated = true
-	a.ArtifactDigest = digestArtifact(a)
+	raw, err := os.ReadFile("testdata/v1_shop_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return a
 }
 
@@ -280,7 +290,7 @@ func TestDecodeV1TamperedDigest(t *testing.T) {
 func TestCheckV2RejectsUnearned(t *testing.T) {
 	t.Parallel()
 	a := Build(earnedInput(replay.Step{Method: "POST", Path: "/checkout"}))
-	a.Dirty = true
+	a.BaselineRev.Dirty = true
 	a.Validated = true
 	a.ArtifactDigest = digestArtifact(a)
 	if err := Check(a); err == nil || !strings.Contains(err.Error(), "unearned") {
@@ -292,7 +302,7 @@ func TestBuildV2DigestStable(t *testing.T) {
 	t.Parallel()
 	in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
 	a, b := Build(in), Build(in)
-	if a.Schema != SchemaV2 || a.ArtifactDigest == "" || !EqualJSON(a, b) {
+	if a.Schema != SchemaV3 || a.ArtifactDigest == "" || !EqualJSON(a, b) {
 		t.Fatalf("unstable: %+v %+v", a, b)
 	}
 	a.Blockers = append(a.Blockers, validate.Blocker{Code: "tampered"})
@@ -314,7 +324,7 @@ func TestCheckV2RejectsForgedBlockers(t *testing.T) {
 			t.Parallel()
 			in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
 			if tc.name == "missing" {
-				in.Dirty = true
+				in.BaselineRev.Dirty = true
 			}
 			a := Build(in)
 			a.Blockers = tc.blockers
@@ -326,5 +336,77 @@ func TestCheckV2RejectsForgedBlockers(t *testing.T) {
 				t.Fatalf("%v", err)
 			}
 		})
+	}
+}
+
+func TestDecodeM1V2NoRevisions(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/v2_shop_m1_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.Validated {
+		t.Fatal("historical bit was rewritten")
+	}
+	if err := Verify(a); err != nil {
+		t.Fatal(err)
+	}
+	d := a.Decision()
+	if d.Validated || len(d.Blockers) != 2 || d.Blockers[0].Code != validate.CodeUnverifiedRevision || d.Blockers[1].Code != validate.CodeUnverifiedRevision {
+		t.Fatalf("%+v", d)
+	}
+	if err := Check(a); err == nil {
+		t.Fatal("v2 accepted for write")
+	}
+	if _, err := Marshal(a); err == nil {
+		t.Fatal("v2 marshaled for write")
+	}
+	encoded, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Decode(bytes.NewReader(encoded))
+	if err != nil || again.ArtifactDigest != a.ArtifactDigest {
+		t.Fatalf("digest changed: %v", err)
+	}
+}
+
+func TestCheckRejectsRevisionlessV3Claim(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/v2_shop_m1_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Schema = SchemaV3
+	a.ArtifactDigest = digestArtifact(a)
+	if err := Check(a); err == nil || !strings.Contains(err.Error(), "unearned") {
+		t.Fatalf("revision-less v3 claim error=%v", err)
+	}
+	if _, err := Marshal(a); err == nil {
+		t.Fatal("revision-less v3 claim marshaled")
+	}
+	raw, err = json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(raw)); err == nil {
+		t.Fatal("forged v3 decoded")
+	}
+}
+
+func TestMarkdownLegacyOmitsMissingRevisions(t *testing.T) {
+	t.Parallel()
+	a := legacyShopArtifact(t)
+	rendered := Markdown(a)
+	if strings.Contains(rendered, "baseline tree:") || strings.Contains(rendered, "patch tree:") {
+		t.Fatalf("missing revisions rendered: %s", rendered)
 	}
 }

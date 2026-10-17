@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/sumedhaerram/aquila/internal/evidence"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
 
@@ -125,5 +127,46 @@ func TestPostgresLegacyRowNotValidated(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("legacy row missing")
+	}
+}
+
+func TestPostgresM1V2NoRevisions(t *testing.T) {
+	p := openTestPostgres(t)
+	raw, err := os.ReadFile("../evidence/testdata/v2_shop_m1_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := evidence.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := a.ArtifactDigest[:idLen]
+	_, err = p.pool.Exec(t.Context(), `INSERT INTO aquila.runs (id,recorded_at,baseline_sha,dirty,workload_digest,artifact_digest,overall,validated,artifact) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT(id) DO UPDATE SET validated=true,artifact=EXCLUDED.artifact`, id, a.Recorded, a.BaselineSHA, a.Dirty, a.WorkloadDigest, a.ArtifactDigest, a.Result.Overall, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.runs WHERE id=$1`, id) })
+	got, err := p.Get(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Validated || len(got.Blockers) != 2 || got.Blockers[0].Code != "unverified_revision" || !got.Artifact.Validated {
+		t.Fatalf("%+v", got)
+	}
+	list, err := p.List(t.Context(), 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range list {
+		if r.ID == id {
+			found = true
+			if r.Validated || !slices.Equal(r.Blockers, got.Blockers) {
+				t.Fatalf("%+v", r)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("M1 v2 row missing")
 	}
 }

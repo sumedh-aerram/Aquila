@@ -56,7 +56,7 @@ func TestStateHEADAndDirty(t *testing.T) {
 		t.Fatal("untracked file must be dirty")
 	}
 
-	raw, err := UnifiedDiff(t.Context(), dir)
+	raw, err := snapshotDiff(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestStateHEADAndDirty(t *testing.T) {
 	}
 }
 
-func TestUnifiedDiffSkipsUntrackedBinary(t *testing.T) {
+func TestSnapshotDiffIncludesUntrackedBinary(t *testing.T) {
 	t.Parallel()
 	dir := stateRepo(t, true)
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
@@ -81,15 +81,15 @@ func TestUnifiedDiffSkipsUntrackedBinary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "ledger"), []byte{0x7f, 'E', 'L', 'F', 0}, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := UnifiedDiff(t.Context(), dir)
+	raw, err := snapshotDiff(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(raw, []byte("main.go")) {
 		t.Fatalf("source missing:\n%s", raw)
 	}
-	if bytes.Contains(raw, []byte("ledger")) {
-		t.Fatalf("binary leaked:\n%s", raw)
+	if !bytes.Contains(raw, []byte("ledger")) {
+		t.Fatalf("binary missing:\n%s", raw)
 	}
 	paths, err := ChangedPaths(t.Context(), dir)
 	if err != nil {
@@ -100,7 +100,7 @@ func TestUnifiedDiffSkipsUntrackedBinary(t *testing.T) {
 	}
 }
 
-func TestUnifiedDiffTrackedHunk(t *testing.T) {
+func TestSnapshotDiffTrackedHunk(t *testing.T) {
 	t.Parallel()
 	dir := stateRepo(t, false)
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
@@ -111,7 +111,7 @@ func TestUnifiedDiffTrackedHunk(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc F() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := UnifiedDiff(t.Context(), dir)
+	raw, err := snapshotDiff(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,9 +120,9 @@ func TestUnifiedDiffTrackedHunk(t *testing.T) {
 	}
 }
 
-func TestUnifiedDiffNotGit(t *testing.T) {
+func TestSnapshotDiffNotGit(t *testing.T) {
 	t.Parallel()
-	_, err := UnifiedDiff(t.Context(), t.TempDir())
+	_, err := Open(t.Context(), t.TempDir())
 	if err != ErrNotGit {
 		t.Fatalf("err=%v", err)
 	}
@@ -187,7 +187,7 @@ func TestStateDirtyBinary(t *testing.T) {
 	}
 }
 
-func TestUnifiedDiffUntrackedCap(t *testing.T) {
+func TestSnapshotManyUntrackedFiles(t *testing.T) {
 	t.Parallel()
 	dir := stateRepo(t, true)
 	for i := 0; i < 51; i++ {
@@ -195,9 +195,32 @@ func TestUnifiedDiffUntrackedCap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := UnifiedDiff(t.Context(), dir); err == nil || !strings.Contains(err.Error(), "51 untracked files exceed cap 50") {
-		t.Fatalf("%v", err)
+	raw, err := snapshotDiff(t, dir)
+	if err != nil {
+		t.Fatal(err)
 	}
+	for i := 0; i < 51; i++ {
+		if !bytes.Contains(raw, []byte(fmt.Sprintf("b/file%d.go", i))) {
+			t.Fatalf("file %d missing", i)
+		}
+	}
+}
+
+func snapshotDiff(t *testing.T, dir string) ([]byte, error) {
+	t.Helper()
+	repo, err := Open(t.Context(), dir)
+	if err != nil {
+		return nil, err
+	}
+	base, err := repo.Head(t.Context())
+	if err != nil {
+		return nil, err
+	}
+	patch, err := repo.SnapshotWorktree(t.Context())
+	if err != nil {
+		return nil, err
+	}
+	return repo.DiffTrees(t.Context(), base.Commit, patch.Commit)
 }
 
 func TestStateUnbornHEAD(t *testing.T) {

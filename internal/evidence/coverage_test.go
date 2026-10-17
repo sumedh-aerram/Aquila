@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -90,11 +91,19 @@ func answered(work ...replay.Step) plan.Evidence {
 func earnedInput(work ...replay.Step) Input {
 	lat := replay.Summary{N: 20, MedNS: 1e6, P95NS: 2e6, HasP95: true}
 	return Input{
-		Now:         time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC),
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
-		BaselineSHA: "deadbeef",
-		Workload:    replay.Workload{Steps: work},
+		Now:      time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC),
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		BaselineRev: gitrev.Revision{
+			Commit: "deadbeef",
+			Tree:   "base",
+			Source: gitrev.SourceBuilt,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceBuilt,
+		},
+		Workload: replay.Workload{Steps: work},
 		Impact: impact.Report{
 			Files:   []string{"a.go"},
 			Direct:  []impact.Finding{{Name: "Charge", File: "a.go", SourceID: "charge", Reason: "changed_lines"}},

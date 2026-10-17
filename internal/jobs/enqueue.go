@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/plan"
 )
 
@@ -28,6 +29,8 @@ func buildJob(opts CreateOpts) (Job, error) {
 	if err := validateCreate(opts); err != nil {
 		return Job{}, err
 	}
+	opts.BaselineRev.Source = gitrev.SourceDeclared
+	opts.PatchRev.Source = gitrev.SourceDeclared
 	id := newID()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	tasks := make([]Task, 0, len(opts.Plan.Steps))
@@ -54,19 +57,22 @@ func buildJob(opts CreateOpts) (Job, error) {
 		deadline = now.Add(DefaultDeadline)
 	}
 	job := Job{
-		ID:          id,
-		Created:     now,
-		Service:     clipService(opts.Service),
-		Baseline:    opts.Baseline,
-		Patch:       opts.Patch,
-		BaselineSHA: opts.BaselineSHA,
-		Dirty:       opts.Dirty,
-		Deadline:    deadline,
-		Workload:    workloadOf(opts.Workload),
-		Plan:        opts.Plan,
-		Impacted:    append([]string(nil), opts.Impacted...),
-		Changes:     opts.Changes,
-		Tasks:       tasks,
+		ID:           id,
+		Created:      now,
+		Service:      clipService(opts.Service),
+		Baseline:     opts.Baseline,
+		Patch:        opts.Patch,
+		BaselineSHA:  opts.BaselineRev.Commit,
+		BaselineRev:  opts.BaselineRev,
+		PatchRev:     opts.PatchRev,
+		ImpactSource: "client",
+		Dirty:        opts.PatchRev.Dirty,
+		Deadline:     deadline,
+		Workload:     workloadOf(opts.Workload),
+		Plan:         opts.Plan,
+		Impacted:     append([]string(nil), opts.Impacted...),
+		Changes:      opts.Changes,
+		Tasks:        tasks,
 	}
 	refreshJob(&job)
 	return job, nil

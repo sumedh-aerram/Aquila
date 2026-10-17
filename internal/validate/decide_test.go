@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -15,7 +16,7 @@ func TestDecideRequiresCleanMatchAndFullDAG(t *testing.T) {
 	if !Decide(in).Validated {
 		t.Fatal("expected earned")
 	}
-	in.Dirty = true
+	in.BaselineRev.Dirty = true
 	if Decide(in).Validated {
 		t.Fatal("dirty")
 	}
@@ -74,12 +75,20 @@ func decisionInput() Input {
 		Patch:    replay.Summary{N: 20, HasP95: true},
 	}}
 	return Input{
-		Changes:     impact.Changes{Bound: []string{"f"}},
-		Impacted:    []string{"GET /healthz"},
-		Workload:    []replay.Step{{Method: "GET", Path: "/healthz"}},
-		BaselineSHA: "abc123",
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
+		Changes:  impact.Changes{Bound: []string{"f"}},
+		Impacted: []string{"GET /healthz"},
+		Workload: []replay.Step{{Method: "GET", Path: "/healthz"}},
+		BaselineRev: gitrev.Revision{
+			Commit: "abc123",
+			Tree:   "base",
+			Source: gitrev.SourceBuilt,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceBuilt,
+		},
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
 		Plan: plan.DAG{Steps: []plan.Step{
 			{ID: "env", Kind: plan.KindEnv, Required: true},
 			{ID: "behavior", Kind: plan.KindBehavior, Required: true},
@@ -275,14 +284,15 @@ func TestDecideAllRoutesRequired(t *testing.T) {
 func TestDecideReportsAllBlockers(t *testing.T) {
 	t.Parallel()
 	in := Input{
-		Dirty:    true,
-		Result:   plan.Evidence{Overall: replay.VerdictDiffer},
-		Changes:  impact.Changes{Unanalyzed: []string{"z", "a"}},
-		Impacted: []string{"GET /z", "GET /a"},
+		BaselineRev: gitrev.Revision{Dirty: true},
+		Result:      plan.Evidence{Overall: replay.VerdictDiffer},
+		Changes:     impact.Changes{Unanalyzed: []string{"z", "a"}},
+		Impacted:    []string{"GET /z", "GET /a"},
 	}
 	want := []Blocker{
 		{Code: CodeDirtyBaseline},
 		{Code: CodeUnverifiedRevision, Subject: "baseline"},
+		{Code: CodeUnverifiedRevision, Subject: "patch"},
 		{Code: CodeMissingTarget, Subject: "baseline"},
 		{Code: CodeMissingTarget, Subject: "patch"},
 		{Code: CodeNotMatch, Subject: "differ"},
@@ -298,5 +308,37 @@ func TestDecideReportsAllBlockers(t *testing.T) {
 	}
 	if got := Decide(in); got.Validated || !reflect.DeepEqual(got.Blockers, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestDecideDeclaredBlocks(t *testing.T) {
+	t.Parallel()
+	in := decisionInput()
+	in.BaselineRev.Source = gitrev.SourceDeclared
+	in.PatchRev.Source = gitrev.SourceDeclared
+	assertBlocker(t, in, CodeUnverifiedRevision, "baseline")
+	assertBlocker(t, in, CodeUnverifiedRevision, "patch")
+}
+
+func TestDecideSameTree(t *testing.T) {
+	t.Parallel()
+	in := decisionInput()
+	in.PatchRev.Tree = in.BaselineRev.Tree
+	assertBlocker(t, in, CodeSameTarget, in.BaselineRev.Tree)
+}
+
+func TestDecideDirtyBaselineRev(t *testing.T) {
+	t.Parallel()
+	in := decisionInput()
+	in.BaselineRev.Dirty = true
+	assertBlocker(t, in, CodeDirtyBaseline, "")
+}
+
+func TestDecideDirtyPatchValidates(t *testing.T) {
+	t.Parallel()
+	in := decisionInput()
+	in.PatchRev.Dirty = true
+	if got := Decide(in); !got.Validated {
+		t.Fatalf("%+v", got)
 	}
 }

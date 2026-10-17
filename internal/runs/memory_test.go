@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/evidence"
+	"github.com/sumedhaerram/aquila/internal/gitrev"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -141,14 +142,22 @@ func TestFromArtifactNeverValidated(t *testing.T) {
 func sampleArtifact(t *testing.T, now time.Time, overall string) evidence.Artifact {
 	t.Helper()
 	return evidence.Build(evidence.Input{
-		Now:         now,
-		Baseline:    "http://127.0.0.1:18180",
-		Patch:       "http://127.0.0.1:18280",
-		BaselineSHA: "abc123",
-		Dirty:       true,
-		Workload:    replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz", Provenance: replay.ProvenanceShopFixture}}},
-		Impact:      impact.Report{Files: []string{"internal/payment/handler.go"}, Direct: []impact.Finding{{Name: "chargeProcessor"}}},
-		Plan:        plan.DAG{Steps: []plan.Step{{ID: "behavior", Kind: plan.KindBehavior}}},
+		Now:      now,
+		Baseline: "http://127.0.0.1:18180",
+		Patch:    "http://127.0.0.1:18280",
+		BaselineRev: gitrev.Revision{
+			Commit: "abc123",
+			Tree:   "base",
+			Source: gitrev.SourceBuilt,
+		},
+		PatchRev: gitrev.Revision{
+			Tree:   "patch",
+			Source: gitrev.SourceBuilt,
+			Dirty:  true,
+		},
+		Workload: replay.Workload{Steps: []replay.Step{{Method: "GET", Path: "/healthz", Provenance: replay.ProvenanceShopFixture}}},
+		Impact:   impact.Report{Files: []string{"internal/payment/handler.go"}, Direct: []impact.Finding{{Name: "chargeProcessor"}}},
+		Plan:     plan.DAG{Steps: []plan.Step{{ID: "behavior", Kind: plan.KindBehavior}}},
 		Result: plan.Evidence{
 			Overall: overall,
 			Steps:   []plan.StepResult{{ID: "behavior", Kind: plan.KindBehavior, Verdict: overall}},
@@ -198,5 +207,29 @@ func TestMemoryLegacyNotValidated(t *testing.T) {
 	check(list[0])
 	if got.Artifact.ArtifactDigest != a.ArtifactDigest || !got.Artifact.Validated {
 		t.Fatal("rewrote legacy artifact")
+	}
+}
+
+func TestMemoryM1V2NoRevisions(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../evidence/testdata/v2_shop_m1_validated.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := evidence.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := NewMemory()
+	rec, err := st.Insert(t.Context(), Record{Artifact: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(t.Context(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Validated || len(got.Blockers) != 2 || got.Blockers[0].Code != "unverified_revision" || !got.Artifact.Validated {
+		t.Fatalf("%+v", got)
 	}
 }
