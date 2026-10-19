@@ -60,10 +60,16 @@ jobs:
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           actionlint
-      - name: Migrate
+      - name: Migrate twice (fresh database regression)
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
-          migrate -path migrations -database "$AQUILA_TEST_POSTGRES_URL" up
+          docker exec "$POSTGRES_CONTAINER" psql -X -v ON_ERROR_STOP=1 -U aquila -d aquila -c 'CREATE SCHEMA IF NOT EXISTS aquila'
+          migration_url="${AQUILA_TEST_POSTGRES_URL}&x-migrations-table=%22aquila%22.%22schema_migrations%22&x-migrations-table-quoted=1"
+          migrate -path migrations -database "$migration_url" up
+          migrate -path migrations -database "$migration_url" up
+          migrate -path migrations -database "$migration_url" version
       - name: Install g++
         run: sudo apt-get update && sudo apt-get install -y g++
       - name: Skip guard checks

@@ -46,7 +46,7 @@ services:
       - ../../examples/shop/migrations:/migrations:ro
     command:
       - -path=/migrations
-      - -database=postgres://shop:shop@shop-postgres:5432/shop?sslmode=disable
+      - -database=postgres://shop:shop@shop-postgres:5432/shop?sslmode=disable&x-migrations-table=%22public%22.%22schema_migrations%22&x-migrations-table-quoted=1
       - up
     networks:
       - aquila
