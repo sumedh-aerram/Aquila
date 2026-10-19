@@ -1,0 +1,311 @@
+{
+  "baseline_rev": {
+    "commit": "ea5383a1e54dfcb0722a0ce08db90e1d13be8721",
+    "tree": "a12c988ce81bcb90b029c19b87bcee3ebb220c5a",
+    "path": "examples/shop",
+    "dirty": false,
+    "source": "built"
+  },
+  "patch_rev": {
+    "commit": "6d961896e0682faeeda3efb5e2dbf58f132f83ec",
+    "tree": "33e910cd77256afefbc3b382ff355f7ebbdcfd20",
+    "path": "examples/shop",
+    "dirty": true,
+    "source": "built"
+  },
+  "schema": "aquila.evidence.v3",
+  "recorded_at": "2026-10-18T02:13:22Z",
+  "baseline": "http://127.0.0.1:18180",
+  "patch": "http://127.0.0.1:18280",
+  "baseline_sha": "ea5383a1e54dfcb0722a0ce08db90e1d13be8721",
+  "dirty": true,
+  "workload_digest": "394b38646f234fe4d78fc3a5b5693ab0d9d5d1d0e55e247b5bc04dbe213911e0",
+  "artifact_digest": "7a789e91d8301b1035b5ed0d8fcc064de581cbd669fb62475a0440a4dd9c4dec",
+  "workload": [
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "provenance": "shop_fixture"
+    },
+    {
+      "method": "GET",
+      "path": "/users/user-1",
+      "provenance": "shop_fixture"
+    },
+    {
+      "method": "POST",
+      "path": "/checkout",
+      "provenance": "shop_fixture"
+    }
+  ],
+  "impact": {
+    "runtime_findings": [
+      {
+        "name": "",
+        "path": "gateway -\u003e checkout -\u003e payment",
+        "reason": "observed_path",
+        "provenance": "observed_parent"
+      },
+      {
+        "name": "",
+        "path": "gateway -\u003e checkout -\u003e payment -\u003e processor",
+        "reason": "observed_path",
+        "provenance": "observed_parent"
+      },
+      {
+        "via": "authorize -\u003e chargeProcessor",
+        "trace_id": "20269bebd4c25dfa9298426864f62ea8",
+        "span_id": "cbf400198c196351",
+        "entry_span_id": "8c8479ea2aff6d79",
+        "name": "authorize",
+        "file": "internal/payment/handler.go",
+        "source_id": "func:(*github.com/sumedhaerram/aquila/examples/shop/internal/payment.Handler).authorize",
+        "service": "payment",
+        "route": "POST /checkout",
+        "line": 58,
+        "reason": "bound_span_caller",
+        "provenance": "trace_entry_caller"
+      }
+    ],
+    "changes": {
+      "bound": [
+        "func:(*github.com/sumedhaerram/aquila/examples/shop/internal/payment.Handler).chargeProcessor"
+      ]
+    },
+    "files": 1,
+    "direct": 1,
+    "likely": 1,
+    "runtime": 3,
+    "unobserved": 1,
+    "changed_files": [
+      "internal/payment/handler.go"
+    ],
+    "direct_names": [
+      "chargeProcessor"
+    ]
+  },
+  "coverage": {
+    "attributions": [
+      {
+        "route": "POST /checkout",
+        "provenance": "trace_entry_caller",
+        "via": "authorize -\u003e chargeProcessor"
+      }
+    ],
+    "impacted": [
+      "POST /checkout"
+    ],
+    "exercised": [
+      "POST /checkout"
+    ],
+    "missed": []
+  },
+  "plan": {
+    "steps": [
+      {
+        "id": "env",
+        "kind": "env",
+        "required": true,
+        "reason": "isolated shop pair started by aquila; GET /healthz; traces stay out of the live store"
+      },
+      {
+        "id": "behavior",
+        "kind": "behavior",
+        "required": true,
+        "depends_on": [
+          "env"
+        ],
+        "reason": "first-run status and json compare"
+      },
+      {
+        "id": "latency",
+        "kind": "latency",
+        "required": true,
+        "n": 20,
+        "depends_on": [
+          "env"
+        ],
+        "reason": "successful-sample median; p95 withheld below 20; no regression threshold"
+      },
+      {
+        "id": "concurrency",
+        "kind": "concurrency",
+        "required": true,
+        "n": 8,
+        "depends_on": [
+          "env"
+        ],
+        "reason": "parallel replay error-rate compare; not a latency threshold"
+      },
+      {
+        "id": "fault_status",
+        "kind": "fault_status",
+        "required": false,
+        "status": 502,
+        "depends_on": [
+          "env"
+        ],
+        "reason": "one-sided 502 inject on patch via loopback proxy; probe, not a patch verdict"
+      },
+      {
+        "id": "tests",
+        "kind": "tests",
+        "required": true,
+        "reason": "go test of impact packages in the current module; not a two-revision compare"
+      }
+    ],
+    "notes": [
+      "not validated until required executable steps succeed on a clean recorded revision. match is not a pass.",
+      "fault is a one-sided inject probe and does not vote overall",
+      "impacted tests are of the current module, not baseline vs patch"
+    ],
+    "module": "/Users/sumedhaerram/Aquila/examples/shop",
+    "test_packages": [
+      "./internal/payment"
+    ]
+  },
+  "result": {
+    "overall": "match",
+    "steps": [
+      {
+        "id": "env",
+        "kind": "env",
+        "verdict": "prepared",
+        "notes": [
+          "healthz"
+        ]
+      },
+      {
+        "id": "behavior",
+        "kind": "behavior",
+        "verdict": "match",
+        "steps": [
+          {
+            "method": "GET",
+            "path": "/healthz",
+            "status": "match",
+            "baseline_status": 200,
+            "patch_status": 200
+          },
+          {
+            "method": "GET",
+            "path": "/users/user-1",
+            "status": "match",
+            "baseline_status": 200,
+            "patch_status": 200
+          },
+          {
+            "method": "POST",
+            "path": "/checkout",
+            "status": "match",
+            "baseline_status": 200,
+            "patch_status": 200
+          }
+        ]
+      },
+      {
+        "id": "latency",
+        "kind": "latency",
+        "verdict": "samples",
+        "latency": [
+          {
+            "method": "GET",
+            "path": "/healthz",
+            "baseline": {
+              "n": 20,
+              "min_ns": 654750,
+              "median_ns": 1188250,
+              "p95_ns": 2482041,
+              "p99_ns": 2705916,
+              "has_p95": true,
+              "has_p99": true
+            },
+            "patch": {
+              "n": 20,
+              "min_ns": 770917,
+              "median_ns": 1482833,
+              "p95_ns": 2545583,
+              "p99_ns": 2801667,
+              "has_p95": true,
+              "has_p99": true
+            }
+          },
+          {
+            "method": "GET",
+            "path": "/users/user-1",
+            "baseline": {
+              "n": 20,
+              "min_ns": 983250,
+              "median_ns": 2007584,
+              "p95_ns": 2787959,
+              "p99_ns": 6289416,
+              "has_p95": true,
+              "has_p99": true
+            },
+            "patch": {
+              "n": 20,
+              "min_ns": 1005333,
+              "median_ns": 1576083,
+              "p95_ns": 3310834,
+              "p99_ns": 4122375,
+              "has_p95": true,
+              "has_p99": true
+            }
+          },
+          {
+            "method": "POST",
+            "path": "/checkout",
+            "baseline": {
+              "n": 20,
+              "min_ns": 146186458,
+              "median_ns": 154581250,
+              "p95_ns": 161393041,
+              "p99_ns": 164651250,
+              "has_p95": true,
+              "has_p99": true
+            },
+            "patch": {
+              "n": 20,
+              "min_ns": 148192375,
+              "median_ns": 155662000,
+              "p95_ns": 162343292,
+              "p99_ns": 163674958,
+              "has_p95": true,
+              "has_p99": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "concurrency",
+        "kind": "concurrency",
+        "verdict": "match",
+        "notes": [
+          "baseline_errors=0/24 patch_errors=0/24"
+        ]
+      },
+      {
+        "id": "fault_status",
+        "kind": "fault_status",
+        "verdict": "prepared",
+        "notes": [
+          "one-sided 502"
+        ]
+      },
+      {
+        "id": "tests",
+        "kind": "tests",
+        "verdict": "prepared",
+        "notes": [
+          "go test"
+        ]
+      }
+    ],
+    "notes": [
+      "not validated until required executable steps succeed on a clean recorded revision. match is not a pass.",
+      "fault is a one-sided inject probe and does not vote overall",
+      "impacted tests are of the current module, not baseline vs patch"
+    ]
+  },
+  "validated": true
+}

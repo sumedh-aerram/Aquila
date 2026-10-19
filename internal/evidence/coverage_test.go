@@ -176,3 +176,86 @@ func TestValidatedNotEarnedWhenChangedCodeNeverRan(t *testing.T) {
 		t.Fatal("validated a change whose code never joined an observed route")
 	}
 }
+
+func TestCoverageAttributionVisibleAndAccepted(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, provenance, via, label string }{
+		{
+			name:       "observed",
+			provenance: "trace_entry",
+			label:      "observed",
+		},
+		{
+			name:       "inferred",
+			provenance: impact.ProvenanceTraceEntryCaller,
+			via:        "authorize -> chargeProcessor",
+			label:      "inferred via authorize -> chargeProcessor",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := earnedInput(replay.Step{
+				Method: "POST",
+				Path:   "/checkout",
+			})
+			in.Impact.Runtime = []impact.Finding{{
+				Name:       "authorize",
+				Route:      "POST /checkout",
+				Provenance: tc.provenance,
+				Via:        tc.via,
+			}}
+			in.Impact.RouteTraceCounts = []impact.RouteTraceCount{{Route: "POST /checkout", Traces: 7}}
+			a := Build(in)
+			if !a.Validated {
+				t.Fatalf("decision=%+v", a.Decision())
+			}
+			raw, err := Marshal(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Decode(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Coverage == nil || len(got.Coverage.Attributions) != 1 || got.Coverage.Attributions[0].Provenance != tc.provenance || got.Coverage.Attributions[0].Via != tc.via {
+				t.Fatalf("coverage=%+v", got.Coverage)
+			}
+			if got.Decision().CoverageBasis != tc.name || !strings.Contains(Markdown(got), "validated: true (coverage "+map[string]string{"observed": "observed", "inferred": "inferred via caller"}[tc.name]+")") {
+				t.Fatalf("verdict attribution: %s", Markdown(got))
+			}
+			want := "POST /checkout  " + tc.label + "; traces=7"
+			if got.Coverage.RouteLabel("POST /checkout") != want || !strings.Contains(Markdown(got), "- exercised "+want) {
+				t.Fatalf("markdown=%s", Markdown(got))
+			}
+		})
+	}
+}
+
+func TestCoverageKeepsObservedAndInferredAttributions(t *testing.T) {
+	t.Parallel()
+	rep := impact.Report{Runtime: []impact.Finding{
+		{
+			Route:      "POST /checkout",
+			Provenance: "trace_entry",
+		},
+		{
+			Route:      "POST /checkout",
+			Provenance: impact.ProvenanceTraceEntryCaller,
+			Via:        "authorize -> chargeProcessor",
+		},
+	}}
+	c := coverageOf(rep, []Request{{
+		Method: "POST",
+		Path:   "/checkout",
+	}}, answered(replay.Step{
+		Method: "POST",
+		Path:   "/checkout",
+	}))
+	if c == nil || len(c.Attributions) != 2 {
+		t.Fatalf("coverage=%+v", c)
+	}
+	label := c.RouteLabel("POST /checkout")
+	if !strings.Contains(label, "observed") || !strings.Contains(label, "inferred via authorize -> chargeProcessor") {
+		t.Fatalf("label=%s", label)
+	}
+}

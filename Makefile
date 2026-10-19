@@ -24,7 +24,7 @@ GOLANGCI_VERSION ?= v2.1.6
 LDFLAGS     := -X $(MODULE)/internal/version.Version=$(VERSION)
 SHOP_GW     := http://127.0.0.1:18080
 
-.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke terraform-eval executor executor-test pair-integration
+.PHONY: help build cli test shop-test lint fmt tidy migrate dev up down logs version shop-reset shop-smoke ingest-smoke ingest-eval graph-smoke source-index source-smoke locate-smoke cli-smoke impact-smoke impact-eval env-smoke replay-eval plan-eval runs-eval attach-eval experiment-smoke job-eval job-smoke terraform-eval executor executor-test pair-integration
 
 help:
 	@printf '%s\n' \
@@ -40,7 +40,8 @@ help:
 		'  make migrate   Apply PostgreSQL migrations' \
 		'  make up        Start control plane + shop without rebuilding images' \
 		'  make dev       Rebuild API image, start stack, apply migrations' \
-		'  make shop-smoke  Hit gateway health, user fetch, and checkout' \
+		'  make shop-reset  Restock demo SKUs; preserve checkout/payment history' \
+		'  make shop-smoke  Restock and exercise traffic (does not test depletion)' \
 		'  make ingest-smoke  List spans Aquila stored after shop traffic' \
 		'  make ingest-eval   OTLP normalize and ingest API tests (privacy + pentest)' \
 		'  make graph-smoke  Derive services, edges, and paths from stored spans' \
@@ -95,7 +96,10 @@ lint: $(GOBIN)/golangci-lint
 	'$(GOBIN)/golangci-lint' run ./...
 	cd examples/shop && '$(GOBIN)/golangci-lint' -c '$(CURDIR)/.golangci.yml' run ./...
 
-shop-smoke:
+shop-reset:
+	$(COMPOSE) exec -T shop-postgres psql -X -v ON_ERROR_STOP=1 -U shop -d shop < examples/shop/seeds/stock.sql
+
+shop-smoke: shop-reset
 	bash examples/shop/scripts/traffic.sh
 
 ingest-smoke: shop-smoke

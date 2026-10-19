@@ -46,7 +46,11 @@ func RunWorkflow(ctx context.Context, args []string, stdin io.Reader, stdout io.
 	if err != nil {
 		return fmt.Errorf("cli: run: %w", err)
 	}
-	raw, _, diffErr := resolveDiff(ctx, stdin, path, *dir)
+	raw, _, diffErr := resolveDiff(ctx, stdin, diffOptions{
+		path:    path,
+		dir:     *dir,
+		notices: stdout,
+	})
 	if diffErr != nil {
 		raw = nil
 	}

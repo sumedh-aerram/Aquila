@@ -58,16 +58,17 @@ type Request struct {
 	Headers    []string `json:"headers,omitempty"`
 }
 
-// ImpactSummary is blast-radius counts and names. It does not keep hunk text.
+// ImpactSummary records classified changes and runtime findings without hunk text.
 type ImpactSummary struct {
-	Changes    impact.Changes `json:"changes,omitzero"`
-	Files      int            `json:"files"`
-	Direct     int            `json:"direct"`
-	Likely     int            `json:"likely"`
-	Runtime    int            `json:"runtime"`
-	Unobserved int            `json:"unobserved"`
-	Changed    []string       `json:"changed_files,omitempty"`
-	DirectName []string       `json:"direct_names,omitempty"`
+	RuntimeFindings []impact.Finding `json:"runtime_findings,omitempty"`
+	Changes         impact.Changes   `json:"changes,omitzero"`
+	Files           int              `json:"files"`
+	Direct          int              `json:"direct"`
+	Likely          int              `json:"likely"`
+	Runtime         int              `json:"runtime"`
+	Unobserved      int              `json:"unobserved"`
+	Changed         []string         `json:"changed_files,omitempty"`
+	DirectName      []string         `json:"direct_names,omitempty"`
 }
 
 // Input is the executed experiment pieces needed to persist evidence.
@@ -129,14 +130,15 @@ func summarizeImpact(rep impact.Report) ImpactSummary {
 		}
 	}
 	return ImpactSummary{
-		Changes:    impact.Classify(rep),
-		Files:      len(rep.Files),
-		Direct:     len(rep.Direct),
-		Likely:     len(rep.Likely),
-		Runtime:    len(rep.Runtime),
-		Unobserved: len(rep.Unobserved),
-		Changed:    append([]string(nil), rep.Files...),
-		DirectName: names,
+		RuntimeFindings: append([]impact.Finding(nil), rep.Runtime...),
+		Changes:         impact.Classify(rep),
+		Files:           len(rep.Files),
+		Direct:          len(rep.Direct),
+		Likely:          len(rep.Likely),
+		Runtime:         len(rep.Runtime),
+		Unobserved:      len(rep.Unobserved),
+		Changed:         append([]string(nil), rep.Files...),
+		DirectName:      names,
 	}
 }
 
@@ -248,6 +250,7 @@ func (a Artifact) Decision() validate.Decision {
 	}
 	if a.Coverage != nil {
 		in.Impacted = a.Coverage.Impacted
+		in.Attributions = a.Coverage.Attributions
 	}
 	in.Changes = a.Impact.Changes
 	for _, r := range a.Workload {

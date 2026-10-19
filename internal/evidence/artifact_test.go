@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sumedhaerram/aquila/internal/gitrev"
+	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
@@ -287,7 +288,7 @@ func TestDecodeV1TamperedDigest(t *testing.T) {
 	}
 }
 
-func TestCheckV2RejectsUnearned(t *testing.T) {
+func TestCheckV3RejectsUnearned(t *testing.T) {
 	t.Parallel()
 	a := Build(earnedInput(replay.Step{Method: "POST", Path: "/checkout"}))
 	a.BaselineRev.Dirty = true
@@ -298,7 +299,7 @@ func TestCheckV2RejectsUnearned(t *testing.T) {
 	}
 }
 
-func TestBuildV2DigestStable(t *testing.T) {
+func TestBuildV3DigestStable(t *testing.T) {
 	t.Parallel()
 	in := earnedInput(replay.Step{Method: "POST", Path: "/checkout"})
 	a, b := Build(in), Build(in)
@@ -311,7 +312,7 @@ func TestBuildV2DigestStable(t *testing.T) {
 	}
 }
 
-func TestCheckV2RejectsForgedBlockers(t *testing.T) {
+func TestCheckV3RejectsForgedBlockers(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name     string
@@ -408,5 +409,53 @@ func TestMarkdownLegacyOmitsMissingRevisions(t *testing.T) {
 	rendered := Markdown(a)
 	if strings.Contains(rendered, "baseline tree:") || strings.Contains(rendered, "patch tree:") {
 		t.Fatalf("missing revisions rendered: %s", rendered)
+	}
+}
+
+func TestRoundTripRuntimeProvenance(t *testing.T) {
+	t.Parallel()
+	finding := impact.Finding{
+		TraceID:     "checkout",
+		SpanID:      "authorize",
+		EntrySpanID: "gateway",
+		Name:        "authorize",
+		SourceID:    "func:authorize",
+		Service:     "payment",
+		Route:       "POST /checkout",
+		Reason:      "bound_span",
+		Provenance:  graph.ProvenanceTraceEntry,
+	}
+	a := Build(Input{
+		Impact: impact.Report{Runtime: []impact.Finding{finding}},
+		Result: plan.Evidence{Overall: replay.VerdictIncomplete},
+	})
+	raw, err := Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Impact.RuntimeFindings) != 1 || got.Impact.RuntimeFindings[0] != finding {
+		t.Fatalf("runtime findings=%+v", got.Impact.RuntimeFindings)
+	}
+}
+
+func TestDecodeHistoricalV3WithoutTraceCounts(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/v3_shop_m21b.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(a); err != nil {
+		t.Fatal(err)
+	}
+	if a.Coverage == nil || len(a.Coverage.TraceCounts) != 0 || !a.Decision().Validated || a.Decision().CoverageBasis != "inferred" {
+		t.Fatalf("decision=%+v coverage=%+v", a.Decision(), a.Coverage)
 	}
 }

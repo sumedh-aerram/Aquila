@@ -38,7 +38,11 @@ func RunPlan(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
-	raw, src, err := resolveDiff(ctx, stdin, path, *dir)
+	raw, src, err := resolveDiff(ctx, stdin, diffOptions{
+		path:    path,
+		dir:     *dir,
+		notices: stdout,
+	})
 	if err != nil {
 		return fmt.Errorf("cli: plan: %w", err)
 	}
@@ -152,7 +156,11 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 	analysisDir := *dir
 	snapshotStart := time.Now()
 	if hasBase {
-		raw, _, err = resolveDiff(ctx, stdin, path, *dir)
+		raw, _, err = resolveDiff(ctx, stdin, diffOptions{
+			path:    path,
+			dir:     *dir,
+			notices: stdout,
+		})
 	} else {
 		snap, err = captureBuild(ctx, stdin, path, *shop)
 		raw = snap.Diff
@@ -222,10 +230,10 @@ func RunExperiment(ctx context.Context, args []string, stdin io.Reader, stdout i
 		writef(stdout, "baseline  %s\n", baseURL)
 		writef(stdout, "patch     %s\n", patchURL)
 	} else {
-		var err error
-		baselineRev, patchRev, err = declaredRevisions(ctx, *dir)
-		if err != nil {
-			return fmt.Errorf("cli: experiment: %w", err)
+		var revisionErr error
+		baselineRev, patchRev, revisionErr = declaredRevisions(ctx, *dir)
+		if revisionErr != nil {
+			writef(stdout, "revision   unverified: %v\n", revisionErr)
 		}
 	}
 	writeRevisions(stdout, baselineRev, patchRev)
@@ -326,7 +334,7 @@ func deltaNotes(d replay.Delta) string {
 func writeCoverage(w io.Writer, c *evidence.Coverage) {
 	writef(w, "coverage   impacted=%d  exercised=%d  missed=%d\n", len(c.Impacted), len(c.Exercised), len(c.Missed))
 	for _, r := range c.Exercised {
-		writef(w, "  hit      %s\n", r)
+		writef(w, "  hit      %s\n", c.RouteLabel(r))
 	}
 	rejected := map[string]struct{}{}
 	for _, r := range c.Rejected {
@@ -334,10 +342,10 @@ func writeCoverage(w io.Writer, c *evidence.Coverage) {
 	}
 	for _, r := range c.Missed {
 		if _, ok := rejected[r]; ok {
-			writef(w, "  missed   %s  auth_rejected (401/403 on both sides; handler did not run)\n", r)
+			writef(w, "  missed   %s  auth_rejected (401/403 on both sides; handler did not run)\n", c.RouteLabel(r))
 			continue
 		}
-		writef(w, "  missed   %s\n", r)
+		writef(w, "  missed   %s\n", c.RouteLabel(r))
 	}
 	if len(c.Exercised) == 0 {
 		writef(w, "  no impacted route got a request; validated cannot be earned\n")
@@ -348,7 +356,7 @@ func writeDecision(w io.Writer, c *evidence.Coverage, d validate.Decision) {
 	if c != nil {
 		writeCoverage(w, c)
 	}
-	writef(w, "validated  %t\n", d.Validated)
+	writef(w, "validated  %t%s\n", d.Validated, d.CoverageNote())
 	for _, b := range d.Blockers {
 		if b.Subject == "" {
 			writef(w, "blocker  %s\n", b.Code)

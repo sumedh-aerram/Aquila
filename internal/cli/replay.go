@@ -135,7 +135,7 @@ func loadWorkload(ctx context.Context, api string, traces int, service, dir stri
 		return replay.Workload{}, err
 	}
 	w := replay.FromSpans(spans)
-	raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", dir)
+	raw, _, err := resolveDiff(ctx, strings.NewReader(""), diffOptions{dir: dir})
 	if err != nil || len(raw) == 0 {
 		return w, nil
 	}

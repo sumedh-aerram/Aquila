@@ -12,19 +12,25 @@ import (
 )
 
 func slurpDiff(stdin io.Reader, path string) ([]byte, error) {
-	raw, _, err := resolveDiff(context.Background(), stdin, path, "")
+	raw, _, err := resolveDiff(context.Background(), stdin, diffOptions{path: path})
 	return raw, err
 }
 
-func resolveDiff(ctx context.Context, stdin io.Reader, path, dir string) ([]byte, string, error) {
-	raw, origin, err := readDiff(stdin, path)
+type diffOptions struct {
+	path    string
+	dir     string
+	notices io.Writer
+}
+
+func resolveDiff(ctx context.Context, stdin io.Reader, opts diffOptions) ([]byte, string, error) {
+	raw, origin, err := readDiff(stdin, opts.path)
 	if err != nil || origin != "worktree" {
 		return raw, origin, err
 	}
-	if dir == "" {
+	if opts.dir == "" {
 		return nil, "worktree", fmt.Errorf("empty diff")
 	}
-	repo, err := gitrev.Open(ctx, dir)
+	repo, err := gitrev.Open(ctx, opts.dir)
 	raw = nil
 	if err == nil {
 		base, headErr := repo.Head(ctx)
@@ -37,6 +43,9 @@ func resolveDiff(ctx context.Context, stdin io.Reader, path, dir string) ([]byte
 			}
 		}
 		if err != nil {
+			if opts.notices != nil {
+				writef(opts.notices, "diff       plain fallback: %v\n", err)
+			}
 			raw, err = repo.PlainDiff(ctx)
 		}
 	}

@@ -26,11 +26,8 @@ func Markdown(a Artifact) string {
 	for _, bkr := range a.Decision().Blockers {
 		b.WriteString("blocker: " + bkr.String() + "\n")
 	}
-	if a.Decision().Validated {
-		b.WriteString("validated: true\n")
-	} else {
-		b.WriteString("validated: false\n")
-	}
+	d := a.Decision()
+	b.WriteString("validated: " + strconv.FormatBool(d.Validated) + d.CoverageNote() + "\n")
 	if a.BaselineSHA != "" {
 		dirty := "clean"
 		if a.Dirty {
@@ -62,10 +59,10 @@ func Markdown(a Artifact) string {
 			"  exercised=" + strconv.Itoa(len(c.Exercised)) +
 			"  missed=" + strconv.Itoa(len(c.Missed)) + "\n")
 		for _, r := range c.Exercised {
-			b.WriteString("- exercised " + r + "\n")
+			b.WriteString("- exercised " + c.RouteLabel(r) + "\n")
 		}
 		for _, r := range c.Missed {
-			b.WriteString("- missed " + r + "\n")
+			b.WriteString("- missed " + c.RouteLabel(r) + "\n")
 		}
 	}
 	b.WriteString("\n## Workload\n\n")
@@ -103,7 +100,7 @@ func Markdown(a Artifact) string {
 		}
 	}
 	if a.Decision().Validated {
-		b.WriteString("\nvalidated. required experiments ran on a clean recorded revision. match is not a ship decision.\n")
+		b.WriteString("\nvalidated" + d.CoverageNote() + ". required experiments ran on a clean recorded revision. match is not a ship decision.\n")
 	} else {
 		b.WriteString("\nnot validated. match is not a pass. this file is evidence, not a policy decision.\n")
 	}

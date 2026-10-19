@@ -34,7 +34,10 @@ func RunAsk(ctx context.Context, args []string, stdin io.Reader, stdout, stderr 
 		}
 		diffRaw = raw
 	} else {
-		if raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", *dir); err == nil {
+		if raw, _, err := resolveDiff(ctx, strings.NewReader(""), diffOptions{
+			dir:     *dir,
+			notices: stderr,
+		}); err == nil {
 			diffRaw = raw
 		}
 	}

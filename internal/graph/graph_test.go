@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,5 +119,180 @@ func TestBuildCycleDoesNotHang(t *testing.T) {
 	snap := Build(spans)
 	if snap.TraceCount != 1 {
 		t.Fatalf("%+v", snap)
+	}
+}
+
+func TestBuildEntryRoutes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		spans []ingest.Span
+		want  []EntryRoute
+	}{
+		{
+			name: "root-most routed server",
+			spans: []ingest.Span{
+				{
+					TraceID:    "trace",
+					SpanID:     "client",
+					Kind:       "client",
+					HTTPMethod: "GET",
+					HTTPRoute:  "/client",
+				},
+				{
+					TraceID:      "trace",
+					SpanID:       "entry",
+					ParentSpanID: "client",
+					Kind:         "server",
+					HTTPMethod:   "POST",
+					HTTPRoute:    "/checkout",
+				},
+				{
+					TraceID:      "trace",
+					SpanID:       "inner",
+					ParentSpanID: "entry",
+					Kind:         "server",
+					HTTPMethod:   "POST",
+					HTTPRoute:    "/authorize",
+				},
+			},
+			want: []EntryRoute{{
+				TraceID: "trace",
+				SpanID:  "entry",
+				Method:  "POST",
+				Route:   "/checkout",
+			}},
+		},
+		{
+			name: "no routed server",
+			spans: []ingest.Span{
+				{
+					TraceID:    "trace",
+					SpanID:     "root",
+					Kind:       "server",
+					HTTPMethod: "POST",
+				},
+				{
+					TraceID:      "trace",
+					SpanID:       "inner",
+					ParentSpanID: "root",
+					Kind:         "internal",
+					HTTPMethod:   "POST",
+					HTTPRoute:    "/authorize",
+				},
+			},
+		},
+		{
+			name: "cyclic parent links",
+			spans: []ingest.Span{
+				{
+					TraceID:      "trace",
+					SpanID:       "root",
+					ParentSpanID: "inner",
+					Kind:         "server",
+					HTTPMethod:   "POST",
+					HTTPRoute:    "/checkout",
+				},
+				{
+					TraceID:      "trace",
+					SpanID:       "inner",
+					ParentSpanID: "root",
+					Kind:         "internal",
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := Build(tc.spans).EntryRoutes
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("entries=%+v, want %+v", got, tc.want)
+			}
+			reversed := slices.Clone(tc.spans)
+			slices.Reverse(reversed)
+			if again := Build(reversed).EntryRoutes; !slices.Equal(again, got) {
+				t.Fatalf("order changed entries: %+v", again)
+			}
+		})
+	}
+}
+
+func TestEntryForSpanRequiresCompleteAncestry(t *testing.T) {
+	t.Parallel()
+	spans := []ingest.Span{
+		{
+			TraceID:    "trace",
+			SpanID:     "a",
+			Kind:       "server",
+			HTTPMethod: "GET",
+			HTTPRoute:  "/a",
+		},
+		{
+			TraceID:    "trace",
+			SpanID:     "b",
+			Kind:       "server",
+			HTTPMethod: "GET",
+			HTTPRoute:  "/b",
+		},
+		{
+			TraceID:      "trace",
+			SpanID:       "child",
+			ParentSpanID: "a",
+			Kind:         "internal",
+		},
+		{
+			TraceID:      "trace",
+			SpanID:       "orphan",
+			ParentSpanID: "missing",
+			Kind:         "server",
+			HTTPMethod:   "GET",
+			HTTPRoute:    "/orphan",
+		},
+		{
+			TraceID:      "trace",
+			SpanID:       "orphan-child",
+			ParentSpanID: "orphan",
+			Kind:         "internal",
+		},
+	}
+	snap := Build(spans)
+	for _, tc := range []struct{ name, span, entry string }{
+		{
+			name:  "own root",
+			span:  "a",
+			entry: "a",
+		},
+		{
+			name:  "ancestor root",
+			span:  "child",
+			entry: "a",
+		},
+		{
+			name:  "other root",
+			span:  "b",
+			entry: "b",
+		},
+		{
+			name: "orphan",
+			span: "orphan",
+		},
+		{
+			name: "orphan descendant",
+			span: "orphan-child",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := snap.EntryForSpan("trace", tc.span)
+			if ok != (tc.entry != "") || got.SpanID != tc.entry {
+				t.Fatalf("entry=%+v, ok=%v", got, ok)
+			}
+		})
+	}
+	if len(snap.EntryRoutes) != 2 {
+		t.Fatalf("entries=%+v", snap.EntryRoutes)
+	}
+	if _, ok := snap.EntryForSpan("other", "child"); ok {
+		t.Fatal("entry leaked across traces")
 	}
 }

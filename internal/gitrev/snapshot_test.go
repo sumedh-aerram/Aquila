@@ -334,6 +334,7 @@ func TestSnapshotRefusesContentConversion(t *testing.T) {
 		config string
 		value  string
 		attr   string
+		body   string
 		want   string
 	}{
 		{
@@ -362,6 +363,7 @@ func TestSnapshotRefusesContentConversion(t *testing.T) {
 		{
 			name: "text",
 			attr: "*.go text",
+			body: "package p\r\n",
 			want: "text=set",
 		},
 		{
@@ -378,7 +380,11 @@ func TestSnapshotRefusesContentConversion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := stateRepo(t, true)
-			writeFile(t, dir, "x.go", []byte("package p\n"))
+			body := tc.body
+			if body == "" {
+				body = "package p\n"
+			}
+			writeFile(t, dir, "x.go", []byte(body))
 			if tc.config != "" {
 				runGit(t, dir, "config", tc.config, tc.value)
 			}
@@ -445,6 +451,150 @@ func TestPlainDiffWithoutBuildSnapshot(t *testing.T) {
 			raw, err := openRepo(t, dir).PlainDiff(t.Context())
 			if err != nil || !bytes.Contains(raw, []byte("+target")) {
 				t.Fatalf("diff=%s error=%v", raw, err)
+			}
+		})
+	}
+}
+
+func TestSnapshotTextAttributes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		attr      string
+		body      string
+		wantError string
+	}{
+		{
+			name: "auto lf",
+			attr: "* text=auto",
+			body: "package p\n",
+		},
+		{
+			name: "lf eol",
+			attr: "* text=auto eol=lf",
+			body: "package p\n",
+		},
+		{
+			name: "text lf",
+			attr: "*.go text",
+			body: "package p\n",
+		},
+		{
+			name:      "auto crlf",
+			attr:      "* text=auto",
+			body:      "package p\r\n",
+			wantError: "would normalize CRLF",
+		},
+		{
+			name:      "mixed",
+			attr:      "* text=auto",
+			body:      "package p\r\nfunc F() {}\n",
+			wantError: "would normalize CRLF",
+		},
+		{
+			name:      "crlf eol",
+			attr:      "* eol=crlf",
+			body:      "package p\n",
+			wantError: "eol=crlf",
+		},
+		{
+			name: "binary auto",
+			attr: "* text=auto",
+			body: "binary\x00bytes\r\n",
+		},
+		{
+			name: "unset text",
+			attr: "* -text",
+			body: "package p\r\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := stateRepo(t, true)
+			writeFile(t, dir, ".gitattributes", []byte(tc.attr+"\n"))
+			writeFile(t, dir, "x.go", []byte(tc.body))
+			repo := openRepo(t, dir)
+			rev, err := repo.SnapshotWorktree(t.Context())
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("error=%v, want %s", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := repo.ReadBlob(t.Context(), rev.Tree, "x.go")
+			if err != nil || string(raw) != tc.body {
+				t.Fatalf("blob=%q, error=%v", raw, err)
+			}
+		})
+	}
+}
+
+func TestSnapshotAutocrlfFalseAliases(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"false", "no", "off", "0"} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+			dir := stateRepo(t, true)
+			runGit(t, dir, "config", "core.autocrlf", value)
+			snapshot(t, openRepo(t, dir))
+		})
+	}
+}
+
+func TestSnapshotDiffReportsOriginalFailure(t *testing.T) {
+	t.Parallel()
+	dir := stateRepo(t, true)
+	writeFile(t, dir, "sub/x.go", []byte("package p\n"))
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "-c", "commit.gpgsign=false", "commit", "-qm", "subdir")
+	raw := []byte("--- a/sub/x.go\n+++ b/sub/x.go\n@@ -1 +1 @@\n-mismatch\n+package p\n")
+	_, err := openRepo(t, filepath.Join(dir, "sub")).SnapshotDiff(t.Context(), raw)
+	if err == nil || !strings.Contains(err.Error(), "patch failed: sub/x.go") || strings.Contains(err.Error(), "sub/sub/x.go") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestSnapshotTextAttributesSubdir(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+		refused    bool
+	}{
+		{
+			name: "lf",
+			body: "package p\n",
+		},
+		{
+			name:    "crlf",
+			body:    "package p\r\n",
+			refused: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := stateRepo(t, true)
+			writeFile(t, dir, "sub/a.go", []byte("package p\n"))
+			runGit(t, dir, "add", "-A")
+			runGit(t, dir, "-c", "commit.gpgsign=false", "commit", "-qm", "subdir")
+			writeFile(t, dir, ".gitattributes", []byte("sub/*.go text=auto eol=lf\n"))
+			writeFile(t, dir, "sub/a.go", []byte(tc.body))
+			repo := openRepo(t, filepath.Join(dir, "sub"))
+			rev, err := repo.SnapshotWorktree(t.Context())
+			if tc.refused {
+				if err == nil || !strings.Contains(err.Error(), "CRLF bytes on sub/a.go") {
+					t.Fatalf("error=%v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := repo.ReadBlob(t.Context(), rev.Tree, "a.go")
+			if err != nil || string(raw) != tc.body {
+				t.Fatalf("blob=%q error=%v", raw, err)
 			}
 		})
 	}

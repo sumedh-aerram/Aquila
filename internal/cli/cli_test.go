@@ -1452,7 +1452,7 @@ func TestResolveDiffUntrackedRealContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package p\nfunc Untracked() { println(42) }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	raw, origin, err := resolveDiff(t.Context(), strings.NewReader(""), "", dir)
+	raw, origin, err := resolveDiff(t.Context(), strings.NewReader(""), diffOptions{dir: dir})
 	if err != nil || origin != "worktree" || !bytes.Contains(raw, []byte("func Untracked() { println(42) }")) {
 		t.Fatalf("%s %s %v", origin, raw, err)
 	}
@@ -1497,5 +1497,106 @@ func TestSymlinkInvestigationAndURLExperiment(t *testing.T) {
 	_, err := captureBuild(t.Context(), strings.NewReader(""), "", dir)
 	if err == nil || !strings.Contains(err.Error(), "unsupported entry link") {
 		t.Fatalf("build error=%v", err)
+	}
+}
+
+func TestWriteCoverageAttribution(t *testing.T) {
+	t.Parallel()
+	c := evidence.Coverage{
+		Impacted:  []string{"POST /checkout", "GET /healthz"},
+		Exercised: []string{"POST /checkout"},
+		Missed:    []string{"GET /healthz"},
+		Attributions: []impact.RouteAttribution{
+			{
+				Route:      "POST /checkout",
+				Provenance: impact.ProvenanceTraceEntryCaller,
+				Via:        "authorize -> chargeProcessor",
+			},
+			{
+				Route:      "GET /healthz",
+				Provenance: graph.ProvenanceTraceEntry,
+			},
+		},
+	}
+	var out strings.Builder
+	writeCoverage(&out, &c)
+	if !strings.Contains(out.String(), "hit      POST /checkout  inferred via authorize -> chargeProcessor") || !strings.Contains(out.String(), "missed   GET /healthz  observed") {
+		t.Fatalf("coverage=%s", out.String())
+	}
+}
+
+func TestRevisionRefusalVisible(t *testing.T) {
+	t.Parallel()
+	dir, _ := revisionShop(t)
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("*.go text=auto\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package p\r\nfunc F() int { return 2 }\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base, patch, err := declaredRevisions(t.Context(), dir)
+	if err == nil || !strings.Contains(err.Error(), "CRLF") || base.Commit == "" || patch.Tree != "" {
+		t.Fatalf("base=%+v patch=%+v error=%v", base, patch, err)
+	}
+	if _, err := captureBuild(t.Context(), strings.NewReader(""), "", dir); err == nil || !strings.Contains(err.Error(), "CRLF") {
+		t.Fatalf("build error=%v", err)
+	}
+	api := impactAPI(t, impact.Report{Files: []string{"link"}})
+	var out strings.Builder
+	if err := RunImpact(t.Context(), []string{"-api", api.URL, "-dir", dir}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "plain fallback:") || !strings.Contains(out.String(), "CRLF") {
+		t.Fatalf("investigation=%s", out.String())
+	}
+	serve := func(w http.ResponseWriter, r *http.Request) { writeReplayJSON(w, map[string]any{"status": "ok"}) }
+	baseline := httptest.NewServer(http.HandlerFunc(serve))
+	defer baseline.Close()
+	patched := httptest.NewServer(http.HandlerFunc(serve))
+	defer patched.Close()
+	out.Reset()
+	err = RunExperiment(t.Context(), []string{
+		"-api", api.URL, "-dir", dir, "-fixture", "-n", "1", "-base", baseline.URL, "-patch", patched.URL,
+	}, strings.NewReader(""), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "revision   unverified:") || !strings.Contains(out.String(), "CRLF") || !strings.Contains(out.String(), "unverified_revision  patch") {
+		t.Fatalf("declared experiment=%s", out.String())
+	}
+}
+
+func TestRunsViewDisclosesInferredCoverage(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../evidence/testdata/v3_shop_m21b.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := evidence.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Coverage.TraceCounts = []impact.RouteTraceCount{{Route: "POST /checkout", Traces: 9}}
+	a.Coverage.Attributions[0].Via = "func:payment.authorize -> func:payment.chargeProcessor"
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, storedRun{ID: "0123456789abcdef", Validated: true, Artifact: a})
+	}))
+	t.Cleanup(api.Close)
+	var out strings.Builder
+	if err := RunRuns(t.Context(), []string{"-api", api.URL, "0123456789abcdef"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"hit      POST /checkout  inferred via func:payment.authorize -> func:payment.chargeProcessor; traces=9",
+		"validated  true (coverage inferred via caller)",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q: %s", want, out.String())
+		}
+	}
+	var experiment strings.Builder
+	writeDecision(&experiment, a.Coverage, a.Decision())
+	if !strings.Contains(out.String(), experiment.String()) {
+		t.Fatalf("runs coverage/verdict differs from experiment: %s", out.String())
 	}
 }
