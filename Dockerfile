@@ -13,7 +13,7 @@ RUN go -C examples/shop mod download
 COPY . .
 ARG VERSION=dev
 RUN mkdir -p /out \
-	&& go run ./cmd/sourceindex -dir examples/shop -out /out/source.json \
+	&& go run ./cmd/sourceindex -timeout 10m -dir examples/shop -out /out/source.json \
 	&& go build -trimpath -ldflags="-s -w -X github.com/sumedhaerram/aquila/internal/version.Version=${VERSION}" -o /out/aquila-server ./cmd/server
 
 FROM alpine:3.21
