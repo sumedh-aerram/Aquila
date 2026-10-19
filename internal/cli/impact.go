@@ -27,7 +27,11 @@ func RunImpact(ctx context.Context, args []string, stdin io.Reader, stdout io.Wr
 		return fmt.Errorf("cli: impact: %w", err)
 	}
 
-	raw, src, err := resolveDiff(ctx, stdin, path, *dir)
+	raw, src, err := resolveDiff(ctx, stdin, diffOptions{
+		path:    path,
+		dir:     *dir,
+		notices: stdout,
+	})
 	if err != nil {
 		return fmt.Errorf("cli: impact: %w", err)
 	}

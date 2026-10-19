@@ -1,7 +1,13 @@
 package evidence
 
 import (
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
+	"github.com/sumedhaerram/aquila/internal/locate"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 	"github.com/sumedhaerram/aquila/internal/validate"
@@ -13,10 +19,12 @@ import (
 // Rejected routes got requests that both sides refused with 401/403; they are
 // also in Missed because the handler under test never ran.
 type Coverage struct {
-	Impacted  []string `json:"impacted"`
-	Exercised []string `json:"exercised"`
-	Missed    []string `json:"missed"`
-	Rejected  []string `json:"rejected,omitempty"`
+	TraceCounts  []impact.RouteTraceCount  `json:"trace_counts,omitempty"`
+	Attributions []impact.RouteAttribution `json:"attributions,omitempty"`
+	Impacted     []string                  `json:"impacted"`
+	Exercised    []string                  `json:"exercised"`
+	Missed       []string                  `json:"missed"`
+	Rejected     []string                  `json:"rejected,omitempty"`
 }
 
 func coverageOf(rep impact.Report, work []Request, res plan.Evidence) *Coverage {
@@ -35,7 +43,37 @@ func coverageOf(rep impact.Report, work []Request, res plan.Evidence) *Coverage 
 			}
 		}
 	}
-	c := &Coverage{Impacted: impacted, Exercised: []string{}, Missed: []string{}}
+	c := &Coverage{
+		Impacted:    impacted,
+		Exercised:   []string{},
+		Missed:      []string{},
+		TraceCounts: rep.RouteTraceCounts,
+	}
+	seen := make(map[impact.RouteAttribution]bool)
+	for _, f := range rep.Runtime {
+		if f.Route == "" {
+			continue
+		}
+		a := impact.RouteAttribution{
+			Route:      f.Route,
+			Provenance: f.Provenance,
+			Via:        f.Via,
+		}
+		if !seen[a] {
+			seen[a] = true
+			c.Attributions = append(c.Attributions, a)
+		}
+	}
+	sort.Slice(c.Attributions, func(i, j int) bool {
+		a, b := c.Attributions[i], c.Attributions[j]
+		if a.Route != b.Route {
+			return a.Route < b.Route
+		}
+		if a.Provenance != b.Provenance {
+			return a.Provenance < b.Provenance
+		}
+		return a.Via < b.Via
+	})
 	for _, route := range impacted {
 		var reached, rejected bool
 		for _, r := range work {
@@ -61,4 +99,39 @@ func coverageOf(rep impact.Report, work []Request, res plan.Evidence) *Coverage 
 		}
 	}
 	return c
+}
+
+// RouteLabel includes every recorded attribution for a route in human-readable coverage.
+func (c Coverage) RouteLabel(route string) string {
+	seen := make(map[string]bool)
+	var labels []string
+	for _, a := range c.Attributions {
+		if a.Route != route {
+			continue
+		}
+		label := "unclassified"
+		switch a.Provenance {
+		case graph.ProvenanceTraceEntry, locate.ProvenanceCodeAttrs:
+			label = validate.CoverageObserved
+		case impact.ProvenanceTraceEntryCaller:
+			label = validate.CoverageInferred
+			if a.Via != "" {
+				label += " via " + a.Via
+			}
+		}
+		if !seen[label] {
+			seen[label] = true
+			labels = append(labels, label)
+		}
+	}
+	for _, count := range c.TraceCounts {
+		if count.Route == route {
+			labels = append(labels, "traces="+strconv.Itoa(count.Traces))
+		}
+	}
+	if len(labels) == 0 {
+		return route
+	}
+	sort.Strings(labels)
+	return route + "  " + strings.Join(labels, "; ")
 }

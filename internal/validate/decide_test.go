@@ -342,3 +342,48 @@ func TestDecideDirtyPatchValidates(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestDecideCoverageBasis(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		provenance []string
+		want       string
+	}{
+		{name: "historical unknown"},
+		{name: "observed", provenance: []string{"trace_entry"}, want: "observed"},
+		{name: "own route", provenance: []string{"code_attrs"}, want: "observed"},
+		{name: "caller only", provenance: []string{impact.ProvenanceTraceEntryCaller}, want: "inferred"},
+		{name: "observed takes precedence", provenance: []string{impact.ProvenanceTraceEntryCaller, "trace_entry"}, want: "observed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := decisionInput()
+			for _, p := range tc.provenance {
+				in.Attributions = append(in.Attributions, impact.RouteAttribution{Route: "GET /healthz", Provenance: p})
+			}
+			d := Decide(in)
+			if !d.Validated || d.CoverageBasis != tc.want {
+				t.Fatalf("decision=%+v, want basis=%q", d, tc.want)
+			}
+			in.Result.Steps = nil
+			if got := Decide(in).CoverageBasis; got != "" {
+				t.Fatalf("unexecuted coverage basis=%q", got)
+			}
+		})
+	}
+	t.Run("any inferred only route", func(t *testing.T) {
+		t.Parallel()
+		in := decisionInput()
+		in.Impacted = append(in.Impacted, "GET /other")
+		in.Workload = append(in.Workload, replay.Step{Method: "GET", Path: "/other"})
+		in.Result.Steps[1].Steps = append(in.Result.Steps[1].Steps, replay.Delta{Method: "GET", Path: "/other", BaselineStatus: 200, PatchStatus: 200})
+		in.Attributions = []impact.RouteAttribution{
+			{Route: "GET /healthz", Provenance: "trace_entry"},
+			{Route: "GET /other", Provenance: impact.ProvenanceTraceEntryCaller},
+		}
+		if d := Decide(in); !d.Validated || d.CoverageBasis != "inferred" {
+			t.Fatalf("decision=%+v", d)
+		}
+	})
+}

@@ -179,7 +179,7 @@ func (r Repo) snapshot(ctx context.Context, head Revision, raw []byte, worktree 
 				return Revision{}, err
 			}
 			args = append(args, "--directory="+r.Rel)
-			if _, err := r.run(ctx, index, raw, append(args, "--check")...); err != nil {
+			if _, retryErr := r.run(ctx, index, raw, append(args, "--check")...); retryErr != nil {
 				return Revision{}, err
 			}
 		}
@@ -251,14 +251,49 @@ func (r Repo) checkAttributes(ctx context.Context, index string, cached bool) er
 		return err
 	}
 	fields := bytes.Split(bytes.TrimSuffix(attrs, []byte{0}), []byte{0})
+	textAttrs := make(map[string]string)
+	eolAttrs := make(map[string]string)
 	for i := 2; i < len(fields); i += 3 {
-		value := string(fields[i])
-		if value != "unspecified" && value != "unset" {
-			if string(fields[i-1]) == "filter" {
-				return fmt.Errorf("gitrev: snapshot: filters unsupported: %s=%s on %s", fields[i-1], value, fields[i-2])
+		name, attr, value := string(fields[i-2]), string(fields[i-1]), string(fields[i])
+		switch attr {
+		case "text":
+			textAttrs[name] = value
+			continue
+		case "eol":
+			eolAttrs[name] = value
+			if value != "crlf" {
+				continue
 			}
-			return fmt.Errorf("gitrev: snapshot: transforming attribute %s=%s on %s unsupported", fields[i-1], value, fields[i-2])
 		}
+		if value == "unspecified" || value == "unset" {
+			continue
+		}
+		if attr == "filter" {
+			return fmt.Errorf("gitrev: snapshot: filters unsupported: %s=%s on %s", attr, value, name)
+		}
+		return fmt.Errorf("gitrev: snapshot: transforming attribute %s=%s on %s unsupported", attr, value, name)
+	}
+	if cached {
+		return nil
+	}
+	eols, err := r.run(ctx, index, nil, "ls-files", "--eol", "-z", "--cached", "--others", "--exclude-standard", "--", r.Rel)
+	if err != nil {
+		return err
+	}
+	for _, record := range bytes.Split(eols, []byte{0}) {
+		header, name, ok := strings.Cut(string(record), "\t")
+		if !ok {
+			continue
+		}
+		columns := strings.Fields(header)
+		if len(columns) < 2 || columns[1] != "w/crlf" && columns[1] != "w/mixed" {
+			continue
+		}
+		text, eol := textAttrs[name], eolAttrs[name]
+		if text == "unset" || text == "unspecified" && eol != "lf" {
+			continue
+		}
+		return fmt.Errorf("gitrev: snapshot: text=%s eol=%s would normalize CRLF bytes on %s", text, eol, name)
 	}
 	return nil
 }
@@ -316,7 +351,7 @@ func objectID(s string) bool {
 
 func (r Repo) checkSettings(ctx context.Context) error {
 	for _, key := range []string{"core.autocrlf", "core.sparseCheckout"} {
-		args := []string{"config", "--get", key}
+		args := []string{"config", "--type=bool-or-str", "--get", key}
 		if key == "core.sparseCheckout" {
 			args = []string{"config", "--bool", "--get", key}
 		}

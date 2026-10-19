@@ -10,14 +10,14 @@ import (
 func declaredRevisions(ctx context.Context, dir string) (gitrev.Revision, gitrev.Revision, error) {
 	repo, err := gitrev.Open(ctx, dir)
 	if err != nil {
-		return gitrev.Revision{}, gitrev.Revision{}, nil
+		return gitrev.Revision{}, gitrev.Revision{}, err
 	}
 	base, err := repo.Head(ctx)
 	if err != nil {
-		return base, gitrev.Revision{}, nil
+		return base, gitrev.Revision{}, err
 	}
-	patch, _ := repo.SnapshotWorktreeAt(ctx, base)
-	return base, patch, nil
+	patch, err := repo.SnapshotWorktreeAt(ctx, base)
+	return base, patch, err
 }
 
 type buildSnapshot struct {

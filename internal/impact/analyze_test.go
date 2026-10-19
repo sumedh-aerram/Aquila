@@ -3,11 +3,13 @@ package impact
 import (
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sumedhaerram/aquila/internal/diff"
 	"github.com/sumedhaerram/aquila/internal/graph"
+	"github.com/sumedhaerram/aquila/internal/ingest"
 	"github.com/sumedhaerram/aquila/internal/locate"
 	"github.com/sumedhaerram/aquila/internal/source"
 )
@@ -54,6 +56,8 @@ func TestAnalyzeRuntimePathFromLocate(t *testing.T) {
 		t.Fatal(err)
 	}
 	loc := locate.Snapshot{Bindings: []locate.Binding{{
+		TraceID:     "trace",
+		SpanID:      "authorize",
 		SourceID:    "func:pay.Handler.authorize",
 		SourceName:  "authorize",
 		ServiceName: "payment",
@@ -62,11 +66,18 @@ func TestAnalyzeRuntimePathFromLocate(t *testing.T) {
 		HTTPRoute:   "/authorize",
 		Provenance:  locate.ProvenanceCodeAttrs,
 	}}}
-	rt := graph.Snapshot{Paths: []graph.Path{{
+	rt := graph.Build([]ingest.Span{{
+		TraceID:    "trace",
+		SpanID:     "authorize",
+		Kind:       "server",
+		HTTPMethod: "POST",
+		HTTPRoute:  "/authorize",
+	}})
+	rt.Paths = []graph.Path{{
 		Services:   []string{"checkout", "payment", "processor"},
 		Traces:     1,
 		Provenance: graph.ProvenanceObservedParent,
-	}}}
+	}}
 	rep := Analyze(g, d, loc, rt)
 	if !hasFinding(rep.Direct, "authorize") {
 		t.Fatalf("direct=%+v", rep.Direct)
@@ -242,5 +253,128 @@ func TestAnalyzeLineOutsideFunc(t *testing.T) {
 	}
 	if c := Classify(rep); len(c.Bound) != 0 || len(c.Unanalyzed) != 1 || c.Unanalyzed[0] != "a.go" {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestAnalyzeTraceEntryRoute(t *testing.T) {
+	t.Parallel()
+	g := fixture(t)
+	d := diff.Diff{Files: []diff.File{{
+		Path:  "internal/payment/handler.go",
+		Lines: []int{41},
+	}}}
+	for _, tc := range []struct {
+		name  string
+		spans []ingest.Span
+		want  []string
+	}{
+		{
+			name: "internal binding reached from entry server",
+			spans: []ingest.Span{
+				{
+					TraceID:     "checkout",
+					SpanID:      "gateway",
+					ServiceName: "gateway",
+					Kind:        "server",
+					HTTPMethod:  "POST",
+					HTTPRoute:   "/checkout",
+				},
+				{
+					TraceID:      "checkout",
+					SpanID:       "checkout",
+					ParentSpanID: "gateway",
+					ServiceName:  "checkout",
+					Kind:         "server",
+					HTTPMethod:   "POST",
+					HTTPRoute:    "/begin",
+				},
+				{
+					TraceID:      "checkout",
+					SpanID:       "authorize",
+					ParentSpanID: "checkout",
+					ServiceName:  "payment",
+					Kind:         "internal",
+					CodeFunction: "authorize",
+					CodeFile:     "internal/payment/handler.go",
+				},
+				{
+					TraceID:    "other",
+					SpanID:     "other",
+					Kind:       "server",
+					HTTPMethod: "GET",
+					HTTPRoute:  "/unrelated",
+				},
+			},
+			want: []string{"POST /checkout"},
+		},
+		{
+			name: "no entry server",
+			spans: []ingest.Span{
+				{
+					TraceID:    "checkout",
+					SpanID:     "client",
+					Kind:       "client",
+					HTTPMethod: "POST",
+					HTTPRoute:  "/checkout",
+				},
+				{
+					TraceID:      "checkout",
+					SpanID:       "authorize",
+					ParentSpanID: "client",
+					ServiceName:  "payment",
+					Kind:         "internal",
+					HTTPMethod:   "POST",
+					HTTPRoute:    "/authorize",
+					CodeFunction: "authorize",
+					CodeFile:     "internal/payment/handler.go",
+				},
+			},
+		},
+		{
+			name: "entry in another trace is not attributed",
+			spans: []ingest.Span{
+				{
+					TraceID:    "other",
+					SpanID:     "gateway",
+					Kind:       "server",
+					HTTPMethod: "POST",
+					HTTPRoute:  "/checkout",
+				},
+				{
+					TraceID:      "checkout",
+					SpanID:       "authorize",
+					ServiceName:  "payment",
+					Kind:         "internal",
+					CodeFunction: "authorize",
+					CodeFile:     "internal/payment/handler.go",
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			bindings := locate.Bind(g, tc.spans)
+			if len(bindings.Bindings) != 1 {
+				t.Fatalf("bindings=%+v", bindings)
+			}
+			bindings.Bindings = append(bindings.Bindings, bindings.Bindings[0])
+			rep := Analyze(g, d, bindings, graph.Build(tc.spans))
+			if got := RuntimeRoutes(rep); !slices.Equal(got, tc.want) {
+				t.Fatalf("routes=%v, want %v; runtime=%+v", got, tc.want, rep.Runtime)
+			}
+			count := 0
+			for _, f := range rep.Runtime {
+				if f.Route == "" {
+					continue
+				}
+				count++
+				if f.Provenance != ProvenanceTraceEntryCaller || f.Via != "func:pay.Handler.authorize -> func:pay.Handler.chargeProcessor" || f.Reason != "bound_span_caller" || f.TraceID != "checkout" || f.SpanID != "authorize" || f.EntrySpanID != "gateway" {
+					t.Fatalf("route provenance=%+v", f)
+				}
+			}
+			if count != len(tc.want) {
+				t.Fatalf("route findings=%d, want %d", count, len(tc.want))
+			}
+		})
 	}
 }

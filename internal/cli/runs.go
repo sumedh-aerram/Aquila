@@ -107,7 +107,9 @@ func getRun(ctx context.Context, c *Client, id string, stdout io.Writer) error {
 	if body.Artifact.Schema != "" {
 		writeEvidence(stdout, body.Artifact.Result)
 	}
-	writeDecision(stdout, nil, validate.Decision{Validated: body.Validated, Blockers: body.Blockers})
+	d := body.Artifact.Decision()
+	d.Validated, d.Blockers = body.Validated, body.Blockers
+	writeDecision(stdout, body.Artifact.Coverage, d)
 	return nil
 }
 
@@ -124,7 +126,9 @@ func postRun(ctx context.Context, c *Client, a evidence.Artifact, stdout io.Writ
 	if out.AttestedBy != "" {
 		writef(stdout, "attested  %s (uploaded evidence)\n", out.AttestedBy)
 	}
-	writeDecision(stdout, nil, validate.Decision{Validated: out.Validated, Blockers: out.Blockers})
+	d := a.Decision()
+	d.Validated, d.Blockers = out.Validated, out.Blockers
+	writeDecision(stdout, a.Coverage, d)
 	return nil
 }
 

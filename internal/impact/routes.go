@@ -127,3 +127,16 @@ func isMethod(m string) bool {
 	}
 	return m != ""
 }
+
+// RouteAttribution records whether a route is observed directly or inferred through a caller.
+type RouteAttribution struct {
+	Route      string `json:"route"`
+	Provenance string `json:"provenance"`
+	Via        string `json:"via,omitempty"`
+}
+
+// RouteTraceCount records distinct observed traces supporting an impacted route.
+type RouteTraceCount struct {
+	Route  string `json:"route"`
+	Traces int    `json:"traces"`
+}

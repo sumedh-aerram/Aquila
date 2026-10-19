@@ -42,7 +42,11 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
-	raw, _, err := resolveDiff(ctx, stdin, path, *dir)
+	raw, _, err := resolveDiff(ctx, stdin, diffOptions{
+		path:    path,
+		dir:     *dir,
+		notices: stdout,
+	})
 	if err != nil {
 		return fmt.Errorf("cli: job: %w", err)
 	}
@@ -72,9 +76,9 @@ func RunJob(ctx context.Context, args []string, stdin io.Reader, stdout io.Write
 		}
 	}
 	dag = plan.WithHealthPath(dag, *health)
-	baselineRev, patchRev, err := declaredRevisions(ctx, *dir)
-	if err != nil {
-		return fmt.Errorf("cli: job: %w", err)
+	baselineRev, patchRev, revisionErr := declaredRevisions(ctx, *dir)
+	if revisionErr != nil {
+		writef(stdout, "revision   unverified: %v\n", revisionErr)
 	}
 	c, err := newClient(*api)
 	if err != nil {

@@ -239,7 +239,10 @@ func writeLocalEdit(w io.Writer, ctx context.Context, dir, origin string, loc lo
 	if origin == originAPI {
 		return
 	}
-	raw, _, err := resolveDiff(ctx, strings.NewReader(""), "", dir)
+	raw, _, err := resolveDiff(ctx, strings.NewReader(""), diffOptions{
+		dir:     dir,
+		notices: w,
+	})
 	if err != nil || len(raw) == 0 {
 		return
 	}

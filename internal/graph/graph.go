@@ -11,9 +11,11 @@ const (
 	// ProvenanceObservedParent marks an edge or path derived from parent_span_id
 	// links present in the same span batch.
 	ProvenanceObservedParent = "observed_parent"
-	maxPaths                 = 100
-	maxServices              = 500
-	maxEdges                 = 2000
+	// ProvenanceTraceEntry identifies an observed root-most HTTP server span.
+	ProvenanceTraceEntry = "trace_entry"
+	maxPaths             = 100
+	maxServices          = 500
+	maxEdges             = 2000
 )
 
 // Service is a process that emitted at least one span in the window.
@@ -37,13 +39,29 @@ type Path struct {
 	Provenance string   `json:"provenance"`
 }
 
-// Snapshot is a derived view of stored spans. It is not a telemetry backend.
+// EntryRoute is the root-most routed server span observed in a trace.
+type EntryRoute struct {
+	TraceID string `json:"trace_id"`
+	SpanID  string `json:"span_id"`
+	Method  string `json:"method"`
+	Route   string `json:"route"`
+}
+
+// Snapshot is a derived view of stored spans. Build retains a private ancestry
+// index for source joins; JSON projections do not contain that index.
 type Snapshot struct {
-	Services   []Service `json:"services"`
-	Edges      []Edge    `json:"edges"`
-	Paths      []Path    `json:"paths"`
-	SpanCount  int       `json:"span_count"`
-	TraceCount int       `json:"trace_count"`
+	entryBySpan map[spanKey]EntryRoute
+	EntryRoutes []EntryRoute `json:"entry_routes,omitempty"`
+	Services    []Service    `json:"services"`
+	Edges       []Edge       `json:"edges"`
+	Paths       []Path       `json:"paths"`
+	SpanCount   int          `json:"span_count"`
+	TraceCount  int          `json:"trace_count"`
+}
+
+type spanKey struct {
+	traceID string
+	spanID  string
 }
 
 type spanNode struct {
@@ -51,14 +69,15 @@ type spanNode struct {
 	children []string
 }
 
-// Build derives services, cross-service edges, and root-to-leaf paths.
+// Build derives services, cross-service edges, root-to-leaf paths and entry routes.
 // An edge exists only when the parent span is in the same batch; missing
 // parents are omitted rather than inferred.
 func Build(spans []ingest.Span) Snapshot {
 	out := Snapshot{
-		Services: []Service{},
-		Edges:    []Edge{},
-		Paths:    []Path{},
+		entryBySpan: make(map[spanKey]EntryRoute),
+		Services:    []Service{},
+		Edges:       []Edge{},
+		Paths:       []Path{},
 	}
 	if len(spans) == 0 {
 		return out
@@ -92,6 +111,18 @@ func Build(spans []ingest.Span) Snapshot {
 	pathTraces := make(map[string]map[string]struct{})
 
 	for traceID, byID := range traces {
+		for id, entry := range traceEntries(traceID, byID) {
+			if entry.SpanID == "" {
+				continue
+			}
+			out.entryBySpan[spanKey{
+				traceID: traceID,
+				spanID:  id,
+			}] = entry
+			if entry.SpanID == id {
+				out.EntryRoutes = append(out.EntryRoutes, entry)
+			}
+		}
 		for id, node := range byID {
 			pid := node.span.ParentSpanID
 			if pid == "" {
@@ -120,6 +151,13 @@ func Build(spans []ingest.Span) Snapshot {
 		}
 	}
 
+	sort.Slice(out.EntryRoutes, func(i, j int) bool {
+		a, b := out.EntryRoutes[i], out.EntryRoutes[j]
+		if a.TraceID != b.TraceID {
+			return a.TraceID < b.TraceID
+		}
+		return a.SpanID < b.SpanID
+	})
 	out.Services = servicesFromCount(svcCount)
 	out.Edges = edgesFromCount(edgeCount)
 	out.Paths = pathsFromTraces(pathTraces)
@@ -230,4 +268,69 @@ func pathsFromTraces(pathTraces map[string]map[string]struct{}) []Path {
 		out = out[:maxPaths]
 	}
 	return out
+}
+
+// EntryForSpan returns the root-most routed server in a span's complete ancestry.
+// Missing parents and cycles do not establish an entry route.
+func (s Snapshot) EntryForSpan(traceID, spanID string) (EntryRoute, bool) {
+	entry, ok := s.entryBySpan[spanKey{
+		traceID: traceID,
+		spanID:  spanID,
+	}]
+	return entry, ok
+}
+
+func traceEntries(traceID string, byID map[string]*spanNode) map[string]EntryRoute {
+	type ancestry struct {
+		complete bool
+		entry    EntryRoute
+	}
+	resolved := make(map[string]ancestry, len(byID))
+	for id := range byID {
+		var chain []string
+		seen := make(map[string]bool)
+		cursor := id
+		var parent ancestry
+		for {
+			if cached, ok := resolved[cursor]; ok {
+				parent = cached
+				break
+			}
+			node, ok := byID[cursor]
+			if !ok || seen[cursor] {
+				break
+			}
+			seen[cursor] = true
+			chain = append(chain, cursor)
+			if node.span.ParentSpanID == "" {
+				parent.complete = true
+				break
+			}
+			cursor = node.span.ParentSpanID
+		}
+		for i := len(chain) - 1; i >= 0; i-- {
+			id := chain[i]
+			node := byID[id]
+			if parent.complete && parent.entry.SpanID == "" && routedServer(node.span) {
+				parent.entry = EntryRoute{
+					TraceID: traceID,
+					SpanID:  id,
+					Method:  node.span.HTTPMethod,
+					Route:   node.span.HTTPRoute,
+				}
+			}
+			resolved[id] = parent
+		}
+	}
+	entries := make(map[string]EntryRoute, len(resolved))
+	for id, parent := range resolved {
+		if parent.complete && parent.entry.SpanID != "" {
+			entries[id] = parent.entry
+		}
+	}
+	return entries
+}
+
+func routedServer(s ingest.Span) bool {
+	return strings.EqualFold(strings.TrimSpace(s.Kind), "server") && strings.TrimSpace(s.HTTPMethod) != "" && strings.TrimSpace(s.HTTPRoute) != ""
 }

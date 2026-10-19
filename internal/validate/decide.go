@@ -9,12 +9,21 @@ import (
 	"strings"
 
 	"github.com/sumedhaerram/aquila/internal/gitrev"
+	"github.com/sumedhaerram/aquila/internal/graph"
 	"github.com/sumedhaerram/aquila/internal/impact"
+	"github.com/sumedhaerram/aquila/internal/locate"
 	"github.com/sumedhaerram/aquila/internal/plan"
 	"github.com/sumedhaerram/aquila/internal/replay"
 )
 
 const minLatencyN = 20
+
+const (
+	// CoverageObserved identifies coverage attributed directly to runtime evidence.
+	CoverageObserved = "observed"
+	// CoverageInferred identifies coverage attributed through a static caller.
+	CoverageInferred = "inferred"
+)
 
 // Validation blocker codes are stable identifiers for unmet policy requirements.
 const (
@@ -53,21 +62,23 @@ func (b Blocker) String() string {
 
 // Decision is the validation policy result.
 type Decision struct {
-	Validated bool      `json:"validated"`
-	Blockers  []Blocker `json:"blockers"`
+	CoverageBasis string    `json:"coverage_basis,omitempty"`
+	Validated     bool      `json:"validated"`
+	Blockers      []Blocker `json:"blockers"`
 }
 
 // Input contains executed evidence and the classified change.
 type Input struct {
-	BaselineRev gitrev.Revision
-	PatchRev    gitrev.Revision
-	Baseline    string
-	Patch       string
-	Plan        plan.DAG
-	Result      plan.Evidence
-	Impacted    []string
-	Workload    []replay.Step
-	Changes     impact.Changes
+	Attributions []impact.RouteAttribution
+	BaselineRev  gitrev.Revision
+	PatchRev     gitrev.Revision
+	Baseline     string
+	Patch        string
+	Plan         plan.DAG
+	Result       plan.Evidence
+	Impacted     []string
+	Workload     []replay.Step
+	Changes      impact.Changes
 }
 
 // Legacy prevents historical evidence from earning current validation.
@@ -99,7 +110,11 @@ func Decide(in Input) Decision {
 	blockers = append(blockers, requiredStepBlockers(in)...)
 	blockers = append(blockers, changeBlockers(in)...)
 	blockers = append(blockers, coverageBlockers(in)...)
-	return Decision{Validated: len(blockers) == 0, Blockers: blockers}
+	return Decision{
+		Validated:     len(blockers) == 0,
+		Blockers:      blockers,
+		CoverageBasis: coverageBasis(in),
+	}
 }
 
 func targetBlockers(in Input) []Blocker {
@@ -301,4 +316,44 @@ func latencyN(got plan.StepResult) int {
 		}
 	}
 	return min
+}
+
+// CoverageNote describes the provenance of executed route coverage.
+func (d Decision) CoverageNote() string {
+	switch d.CoverageBasis {
+	case CoverageInferred:
+		return " (coverage inferred via caller)"
+	case CoverageObserved:
+		return " (coverage observed)"
+	default:
+		return ""
+	}
+}
+
+func coverageBasis(in Input) string {
+	basis := ""
+	for _, route := range in.Impacted {
+		if !Covered([]string{route}, in.Workload, in.Result) {
+			continue
+		}
+		observed, inferred := false, false
+		for _, a := range in.Attributions {
+			if a.Route != route {
+				continue
+			}
+			switch a.Provenance {
+			case graph.ProvenanceTraceEntry, locate.ProvenanceCodeAttrs:
+				observed = true
+			case impact.ProvenanceTraceEntryCaller:
+				inferred = true
+			}
+		}
+		if inferred && !observed {
+			return CoverageInferred
+		}
+		if observed {
+			basis = CoverageObserved
+		}
+	}
+	return basis
 }
