@@ -69,7 +69,7 @@ The task returned to the queue when the 15 second lease expired, and a second wo
 
 ## Quickstart
 
-Requires Go 1.25+ and Docker. Starts Aquila and a bundled seven-service demo shop on localhost.
+Requires Go 1.26.9 and Docker. Starts Aquila and a bundled seven-service demo shop on localhost.
 
 ```bash
 git clone https://github.com/sumedh-aerram/Aquila.git && cd Aquila
