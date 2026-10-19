@@ -3,7 +3,9 @@ package runs
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"slices"
@@ -39,7 +41,7 @@ func TestPostgresInsertIsIdempotent(t *testing.T) {
 	p := openTestPostgres(t)
 	h := sha256.Sum256([]byte(t.Name()))
 	now := time.Unix(1_700_000_000+int64(h[0]), 0).UTC()
-	a := sampleArtifact(t, now, replay.VerdictDiffer)
+	a := isolatePostgresArtifact(t, sampleArtifact(t, now, replay.VerdictDiffer))
 	t.Cleanup(func() {
 		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.runs WHERE id = $1`, a.ArtifactDigest[:idLen])
 	})
@@ -61,7 +63,7 @@ func TestPostgresInsertIsIdempotent(t *testing.T) {
 	if got.Overall != replay.VerdictDiffer || got.Artifact.Result.Overall != replay.VerdictDiffer {
 		t.Fatalf("%+v", got)
 	}
-	listed, err := p.List(t.Context(), 50, "")
+	listed, err := p.List(t.Context(), 50, a.Service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,13 +96,13 @@ func TestPostgresRejectsValidated(t *testing.T) {
 
 func TestPostgresLegacyRowNotValidated(t *testing.T) {
 	p := openTestPostgres(t)
-	a := legacyArtifact(t)
+	a := isolatePostgresArtifact(t, legacyArtifact(t))
 	raw, err := json.Marshal(a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := a.ArtifactDigest[:idLen]
-	_, err = p.pool.Exec(t.Context(), `INSERT INTO aquila.runs (id,recorded_at,baseline_sha,dirty,workload_digest,artifact_digest,overall,validated,artifact) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT(id) DO UPDATE SET validated=true,artifact=EXCLUDED.artifact`, id, a.Recorded, a.BaselineSHA, a.Dirty, a.WorkloadDigest, a.ArtifactDigest, a.Result.Overall, raw)
+	_, err = p.pool.Exec(t.Context(), `INSERT INTO aquila.runs (id,recorded_at,baseline_sha,dirty,workload_digest,artifact_digest,overall,validated,artifact) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8)`, id, a.Recorded, a.BaselineSHA, a.Dirty, a.WorkloadDigest, a.ArtifactDigest, a.Result.Overall, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +114,7 @@ func TestPostgresLegacyRowNotValidated(t *testing.T) {
 	if got.Validated || len(got.Blockers) != 1 || got.Blockers[0].Code != "legacy_schema" {
 		t.Fatalf("%+v", got)
 	}
-	list, err := p.List(t.Context(), 50, "")
+	list, err := p.List(t.Context(), 50, a.Service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,8 +142,13 @@ func TestPostgresM1V2NoRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a = isolatePostgresArtifact(t, a)
+	raw, err = json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := a.ArtifactDigest[:idLen]
-	_, err = p.pool.Exec(t.Context(), `INSERT INTO aquila.runs (id,recorded_at,baseline_sha,dirty,workload_digest,artifact_digest,overall,validated,artifact) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT(id) DO UPDATE SET validated=true,artifact=EXCLUDED.artifact`, id, a.Recorded, a.BaselineSHA, a.Dirty, a.WorkloadDigest, a.ArtifactDigest, a.Result.Overall, raw)
+	_, err = p.pool.Exec(t.Context(), `INSERT INTO aquila.runs (id,recorded_at,baseline_sha,dirty,workload_digest,artifact_digest,overall,validated,artifact) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8)`, id, a.Recorded, a.BaselineSHA, a.Dirty, a.WorkloadDigest, a.ArtifactDigest, a.Result.Overall, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +160,7 @@ func TestPostgresM1V2NoRevisions(t *testing.T) {
 	if got.Validated || len(got.Blockers) != 2 || got.Blockers[0].Code != "unverified_revision" || !got.Artifact.Validated {
 		t.Fatalf("%+v", got)
 	}
-	list, err := p.List(t.Context(), 50, "")
+	list, err := p.List(t.Context(), 50, a.Service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,4 +176,22 @@ func TestPostgresM1V2NoRevisions(t *testing.T) {
 	if !found {
 		t.Fatal("M1 v2 row missing")
 	}
+}
+
+// isolatePostgresArtifact gives each fixture a private service and content ID,
+// preserving its schema and historical validation claims.
+func isolatePostgresArtifact(t *testing.T, a evidence.Artifact) evidence.Artifact {
+	t.Helper()
+	a.Service = "postgres-test-" + rand.Text()
+	a.ArtifactDigest = ""
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	a.ArtifactDigest = hex.EncodeToString(sum[:])
+	if err := evidence.Verify(a); err != nil {
+		t.Fatal(err)
+	}
+	return a
 }

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -32,7 +33,7 @@ func openTestPostgres(t *testing.T) *Postgres {
 
 func TestPostgresUpsertIsIdempotent(t *testing.T) {
 	p := openTestPostgres(t)
-	h := sha256.Sum256([]byte(t.Name()))
+	h := sha256.Sum256([]byte(t.Name() + rand.Text()))
 	traceID := hex.EncodeToString(h[:16])
 	spanID := hex.EncodeToString(h[:8])
 	t.Cleanup(func() {
@@ -75,21 +76,22 @@ func TestPostgresUpsertIsIdempotent(t *testing.T) {
 
 func TestPostgresListTraceWindow(t *testing.T) {
 	p := openTestPostgres(t)
-	h := sha256.Sum256([]byte(t.Name()))
+	h := sha256.Sum256([]byte(t.Name() + rand.Text()))
 	traceID := hex.EncodeToString(h[:16])
 	parentID := hex.EncodeToString(h[:8])
 	childID := hex.EncodeToString(h[8:16])
 	t.Cleanup(func() {
 		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id = $1`, traceID)
 	})
+	service := "checkout-test-" + rand.Text()
 	start := time.Unix(10, 0).UTC()
 	if err := p.UpsertSpans(t.Context(), []Span{
-		{TraceID: traceID, SpanID: parentID, ServiceName: "checkout", StartTime: start},
+		{TraceID: traceID, SpanID: parentID, ServiceName: service, StartTime: start},
 		{TraceID: traceID, SpanID: childID, ParentSpanID: parentID, ServiceName: "payment", StartTime: start.Add(time.Millisecond)},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := p.ListTraceWindow(t.Context(), 50, "")
+	got, err := p.ListTraceWindow(t.Context(), 50, service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,15 +108,21 @@ func TestPostgresListTraceWindow(t *testing.T) {
 
 func TestPostgresListAttaches(t *testing.T) {
 	p := openTestPostgres(t)
-	h := sha256.Sum256([]byte(t.Name()))
+	h := sha256.Sum256([]byte(t.Name() + rand.Text()))
 	traceID := hex.EncodeToString(h[:16])
 	t.Cleanup(func() {
 		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id = $1`, traceID)
 	})
-	now := time.Unix(50, 0).UTC()
+	service := "ledger-test-" + rand.Text()
+	// ListAttaches has no service filter; place this fixture after existing data
+	// so its presence does not depend on the bounded list's current contents.
+	var now time.Time
+	if err := p.pool.QueryRow(t.Context(), `SELECT COALESCE(MAX(start_time), now()) + interval '1 second' FROM aquila.spans`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.UpsertSpans(t.Context(), []Span{
-		{TraceID: traceID, SpanID: hex.EncodeToString(h[:8]), ServiceName: "ledger", StartTime: now},
-		{TraceID: traceID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: "ledger", StartTime: now.Add(time.Second)},
+		{TraceID: traceID, SpanID: hex.EncodeToString(h[:8]), ServiceName: service, StartTime: now},
+		{TraceID: traceID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: service, StartTime: now.Add(time.Second)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -124,32 +132,33 @@ func TestPostgresListAttaches(t *testing.T) {
 	}
 	var found Attach
 	for _, a := range got {
-		if a.Service == "ledger" {
+		if a.Service == service {
 			found = a
 			break
 		}
 	}
-	if found.Spans < 2 {
+	if found.Spans != 2 || !found.LastSeen.Equal(now.Add(time.Second)) {
 		t.Fatalf("%+v", got)
 	}
 }
 
 func TestPostgresListTraceWindowServiceDropsOtherAttach(t *testing.T) {
 	p := openTestPostgres(t)
-	h := sha256.Sum256([]byte(t.Name()))
+	h := sha256.Sum256([]byte(t.Name() + rand.Text()))
 	shopID := hex.EncodeToString(h[:16])
 	appID := hex.EncodeToString(h[16:32])
 	t.Cleanup(func() {
 		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id IN ($1, $2)`, shopID, appID)
 	})
+	service := "ledger-test-" + rand.Text()
 	now := time.Unix(40, 0).UTC()
 	if err := p.UpsertSpans(t.Context(), []Span{
 		{TraceID: shopID, SpanID: hex.EncodeToString(h[:8]), ServiceName: "gateway", HTTPRoute: "/users/{id}", HTTPMethod: "GET", StartTime: now.Add(time.Minute)},
-		{TraceID: appID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: "ledger", HTTPRoute: "/invoice", HTTPMethod: "GET", StartTime: now},
+		{TraceID: appID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: service, HTTPRoute: "/invoice", HTTPMethod: "GET", StartTime: now},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := p.ListTraceWindow(t.Context(), 1, "ledger")
+	got, err := p.ListTraceWindow(t.Context(), 1, service)
 	if err != nil {
 		t.Fatal(err)
 	}

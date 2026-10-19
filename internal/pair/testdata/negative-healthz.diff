@@ -1,0 +1,8 @@
+diff --git a/examples/shop/internal/gateway/handler.go b/examples/shop/internal/gateway/handler.go
+--- a/examples/shop/internal/gateway/handler.go
++++ b/examples/shop/internal/gateway/handler.go
+@@ -18,3 +18,3 @@ func NewHandler(usersURL, checkoutURL string) http.Handler {
+ 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+-		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
++		httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "changed"})
+ 	})

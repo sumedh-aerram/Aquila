@@ -16,7 +16,7 @@ jobs:
   go:
     name: build-test-lint
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16-alpine
@@ -34,39 +34,59 @@ jobs:
     env:
       AQUILA_TEST_POSTGRES_URL: postgres://aquila:aquila@127.0.0.1:5432/aquila?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: go.mod
-          cache: true
-
+          cache-dependency-path: |
+            go.sum
+            examples/shop/go.sum
       - name: Format check
         run: test -z "$(gofmt -l .)"
-
+      - name: Module tidy drift
+        run: |
+          go mod tidy -diff
+          go -C examples/shop mod tidy -diff
       - name: Lint
         run: make lint
-
+      - name: Vulnerability check
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+          (cd examples/shop && govulncheck ./...)
+      - name: Workflow lint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          actionlint
       - name: Migrate
         run: |
-          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
+          go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.3
           migrate -path migrations -database "$AQUILA_TEST_POSTGRES_URL" up
-
       - name: Install g++
         run: sudo apt-get update && sudo apt-get install -y g++
-
-      - name: Test
-        run: make test
-
+      - name: Skip guard checks
+        run: python3 .github/scripts/test-skip-guard.py
+      - name: Test with skip guard
+        run: make ci-test
       - name: Build
         run: make build
+      - name: Test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-logs
+          path: out/test-*.json
 
   compose-config:
     name: compose-config
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Validate Compose files
         run: docker compose -f deploy/compose/docker-compose.yaml -f deploy/compose/docker-compose.shop.yaml config -q
 
@@ -75,9 +95,100 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.11.4
           terraform_wrapper: false
       - name: Format and validate
         run: make terraform-eval
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AQUILA_TEST_DOCKER: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+      - name: Pair and sandbox tests (no skips allowed)
+        run: |
+          bash .github/scripts/go-test.sh - out/integration-pair.json go test -json -race -count=1 -run 'TestIntegration|TestPairUpFromTrees' ./internal/pair
+          bash .github/scripts/go-test.sh - out/integration-sandbox.json go test -json -race -count=1 ./internal/sandbox
+      - name: Integration logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-logs
+          path: out/integration-*.json
+
+  eval:
+    name: eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            examples/shop/go.sum
+      - name: Evaluate
+        run: make impact-eval plan-eval runs-eval job-eval replay-eval attach-eval ingest-eval
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+      - name: Start demo and exercise checkout
+        run: make dev && make cli && make shop-smoke
+      - name: Positive D1 experiment
+        run: |
+          ./bin/aquila experiment -fixture -n 20 -f internal/pair/testdata/d1.diff -out e2e-d1.json
+          jq -e -f .github/scripts/assert-e2e-positive.jq e2e-d1.json
+      - name: Negative health response experiment
+        run: |
+          ./bin/aquila experiment -fixture -n 20 -f internal/pair/testdata/negative-healthz.diff -out e2e-negative.json
+          jq -e -f .github/scripts/assert-e2e-negative.jq e2e-negative.json
+      - name: Render saved evidence
+        if: always()
+        run: |
+          for evidence in e2e-d1.json e2e-negative.json; do
+            if [ -f "$evidence" ]; then
+              ./bin/aquila report "$evidence" > "${evidence%.json}.md"
+            fi
+          done
+      - name: Compose logs
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.yaml -f deploy/compose/docker-compose.shop.yaml logs --no-color > e2e-compose.log 2>&1
+      - name: Evidence and compose logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-evidence
+          path: |
+            e2e-d1.json
+            e2e-d1.md
+            e2e-negative.json
+            e2e-negative.md
+            e2e-compose.log
+      - name: Stop demo
+        if: always()
+        run: make down

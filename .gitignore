@@ -30,6 +30,8 @@ vendor/
 /AGENTS.md
 /PROJECT_STATE.md
 /.cursor/
+/.claude/
+/paseo.json
 /docs/*
 !/docs/SECURITY.md
 

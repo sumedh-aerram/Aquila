@@ -1,0 +1,6 @@
+# Docker gates may skip only in build-test-lint; integration uses no allowlist.
+# Each listed test executes with Docker in the integration job.
+github.com/sumedhaerram/aquila/internal/pair TestIntegration # wrapper for Docker pair test
+github.com/sumedhaerram/aquila/internal/pair TestIntegration/pair_up_from_trees # Docker pair subtest
+github.com/sumedhaerram/aquila/internal/pair TestPairUpFromTrees # Docker pair test
+github.com/sumedhaerram/aquila/internal/sandbox TestRunEcho # Docker sandbox test
