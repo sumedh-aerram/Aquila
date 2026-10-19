@@ -105,7 +105,7 @@ func loadEnv() []string {
 		}
 		out = append(out, kv)
 	}
-	// Inherited GOTOOLCHAIN can be older than the target module's go line (shop is 1.25.6).
+	// Let each target module select the toolchain required by its go directive.
 	return append(out, "CGO_ENABLED=0", "GOTOOLCHAIN=auto")
 }
 
