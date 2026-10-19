@@ -4,7 +4,7 @@ Pre-merge change validation for backend services, built on OpenTelemetry traces.
 
 [![CI](https://github.com/sumedh-aerram/Aquila/actions/workflows/ci.yml/badge.svg)](https://github.com/sumedh-aerram/Aquila/actions/workflows/ci.yml)
 
-Aquila reads an uncommitted `git diff` and the traces a service already emits, finds the live routes that execute the changed code, and replays requests against the baseline build and the patched build side by side. A change is marked `validated` only when those requests reached the changed code and no behavior or latency regressed.
+Aquila reads an uncommitted `git diff` and the traces a service already emits, attributes changed functions to entry routes, and replays requests against baseline and patch builds. Route attribution may be observed directly or inferred through an immediate static caller. `validated` requires built revision identities, executed comparisons, coverage of every impacted route, and no flagged latency shift. Inferred coverage does not prove that the changed callee branch ran. See [validation policy](docs/EXPERIMENTS.md).
 
 Runs locally. Needs no production access and uses no LLM.
 
@@ -28,7 +28,7 @@ Aquila was run against a private production Go API (32 packages, 117 files, 660 
 
 ![aquila observe and impact output](assets/observe-impact.svg)
 
-Every span in the window was bound to a function and line. The fix changed 12 functions; 8 of them run on observed routes. The remaining 6 are listed as `unobserved` rather than counted as covered.
+Every span in the window was bound to a function and line. The fix changed 12 functions; 8 of them run on observed routes. The report also lists 6 `unobserved` findings; these findings are not a disjoint count of the remaining changed functions.
 
 Result: the set of routes to retest came from recorded traffic instead of guesswork.
 
@@ -69,7 +69,7 @@ The task returned to the queue when the 15 second lease expired, and a second wo
 
 ## Quickstart
 
-Requires Go 1.26.10 and Docker. Starts Aquila and a bundled seven-service demo shop on localhost.
+Requires Go 1.26.10 or a compatible newer toolchain, Docker with Compose v2, Make, curl, and a C++20 compiler for `make build`. Starts Aquila and a bundled seven-service demo shop on localhost. See the [local demo runbook](docs/runbooks/local-demo.md) for ports and verification steps.
 
 ```bash
 git clone https://github.com/sumedh-aerram/Aquila.git && cd Aquila
@@ -81,11 +81,11 @@ make experiment-smoke              # old and new shop side by side, writes out/e
 ./bin/aquila report out/evidence.json
 ```
 
-The smoke run takes one sample per route, so it prints `validated false` by design. Use `-n 20` for a real verdict. `make down` stops the stack.
+The smoke run takes one sample per route, so it prints `validated false` by design. Use `experiment -n 20` to meet the sample requirement; the other policy gates must also succeed. `make down` stops the stack and preserves the live demo volumes.
 
 ## Running against a service
 
-The service must export OpenTelemetry traces to `127.0.0.1:4317` and set `code.function.name` and `code.file.path` on spans; those attributes bind a request to a function.
+The service must export OpenTelemetry traces to the local Collector at `127.0.0.1:4317` and set `code.function.name` and `code.file.path` on spans; those attributes bind a request to a Go function. The Collector forwards traces to Aquila's HTTP ingest endpoint. Go source mapping is implemented; other languages receive file-level analysis.
 
 ```bash
 cd ~/src/billing
@@ -110,19 +110,19 @@ aquila report evidence.json
 ]}
 ```
 
-Without `-workload`, Aquila replays the GET routes observed in the trace window.
+Without `-workload`, Aquila derives GET/HEAD/OPTIONS requests from concrete server-span routes, preferring routes joined to the edit. Templates are omitted. Experiments using operator-provided URLs record `source=declared` on both revisions and cannot earn `validated`; Aquila does not build or attest those gateways. See [pair construction and replay](docs/components/pair-and-replay.md).
 
 ## Validation rules
 
-`match` only means both builds answered the same way. `validated true` requires all five:
+`match` describes the comparison after volatile JSON fields are removed. `validated true` is a separate policy result requiring:
 
-1. Every required step ran and succeeded: health, behavior, latency, plus concurrency and tests when planned.
-2. The patch is a clean, committed git revision. A dirty tree can be analyzed but not validated.
-3. At least 20 latency samples per route.
-4. At least one request reached a route that runs the changed code, and both builds handled it. A 401 on both sides does not count.
-5. No route regressed by more than 2x and 5 ms.
+1. Health, behavior, latency, and concurrency results succeed, plus every additional required executable step. Missing, skipped, duplicate, and failed core steps block validation, even if omitted from the plan.
+2. Both revisions have distinct immutable trees labeled `built`, distinct gateway URLs, and a clean baseline. An uncommitted patch can validate after snapshotting and building; URL-only declarations cannot.
+3. At least 20 recorded latency samples for every workload row on each side.
+4. At least one changed function is bound, no changed path remains unanalyzed, and every impacted route receives an answered request on both builds without an auth refusal on both sides. Caller-inferred coverage is accepted and disclosed.
+5. No patch median is more than 2x baseline and at least 5 ms slower.
 
-The server re-derives these for every stored run and rejects evidence that claims more than it earned.
+The server re-derives policy from submitted evidence and rejects inconsistent claims. Uploaded results and `built` labels remain client-attested; digest integrity does not prove execution. The policy and regression tests are in `internal/validate/decide.go` and `internal/validate/decide_test.go` (`TestDecideDirtyPatchValidates`, `TestDecideAllRoutesRequired`, `TestDecideCoverageBasis`).
 
 ## Commands
 
@@ -159,7 +159,7 @@ The server re-derives these for every stored run and rejects evidence that claim
 - Queued jobs refuse workloads with headers, so credentials never end up in the database. Run authenticated experiments with `aquila experiment` locally.
 - Set `AQUILA_API_TOKEN` to require a token on the API and the worker port. Local Compose leaves it empty and only listens on `127.0.0.1`.
 - `AQUILA_LEASED_TASKS_PER_SERVICE` limits how many tasks one service can run at once.
-- Aquila never stores request or response bodies. See [docs/SECURITY.md](docs/SECURITY.md).
+- Telemetry and evidence omit request and response bodies. Queued jobs persist operator-supplied request bodies. Evidence may retain query values; keep secrets out of request paths. See [docs/SECURITY.md](docs/SECURITY.md).
 
 | Service | URL |
 | --- | --- |
@@ -175,6 +175,12 @@ The server re-derives these for every stored run and rejects evidence that claim
 ```bash
 make build && make test && make lint
 ```
+
+`make test` needs Docker for the sandbox test and a migrated, isolated PostgreSQL database for complete integration coverage. See [CONTRIBUTING.md](CONTRIBUTING.md) for the non-Docker subset and full CI gates.
+
+## Documentation
+
+Start with the [documentation index](docs/README.md), then [architecture](docs/ARCHITECTURE.md), [experiments](docs/EXPERIMENTS.md), and the [CI runbook](docs/runbooks/ci.md). The case study above is historical recorded output, not a reproducible benchmark publication; see [benchmark policy](docs/BENCHMARKS.md).
 
 ## License
 
