@@ -32,8 +32,10 @@ vendor/
 /.cursor/
 /.claude/
 /paseo.json
-/docs/*
-!/docs/SECURITY.md
+/docs/PRD.md
+/docs/AGENT.md
+/docs/CONVENTIONS.md
+/docs/plans/
 
 # Native supervisor build products (sources in executor/ are tracked)
 executor/aquila-exec
