@@ -237,12 +237,19 @@ $(GOBIN)/golangci-lint:
 	GOBIN='$(GOBIN)' $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 pair-integration:
-	AQUILA_TEST_DOCKER=1 $(GO) test -race -count=1 -run Integration ./internal/pair
+	AQUILA_TEST_DOCKER=1 bash .github/scripts/go-test.sh - out/integration-pair.json --require TestIntegration,TestIntegration/pair_up_from_trees,TestPairUpFromTrees $(GO) test -json -race -count=1 -run 'TestIntegration|TestPairUpFromTrees' ./internal/pair
+
+.PHONY: sandbox-integration api-image
+sandbox-integration:
+	AQUILA_TEST_DOCKER=1 bash .github/scripts/go-test.sh - out/integration-sandbox.json --require TestRunEcho $(GO) test -json -race -count=1 ./internal/sandbox
+
+api-image:
+	$(COMPOSE) build api
 
 # Match make test, retaining JSON output for CI's skip policy.
 .PHONY: ci-test
 ci-test:
 	$(GO) -C examples/shop mod download
 	bash .github/scripts/go-test.sh .github/test-skip-allowlist.txt out/test-root.json $(GO) test -json -race -count=1 ./...
-	bash .github/scripts/go-test.sh .github/test-skip-allowlist.txt out/test-shop.json $(GO) -C examples/shop test -json -race -count=1 ./...
+	bash .github/scripts/go-test.sh - out/test-shop.json $(GO) -C examples/shop test -json -race -count=1 ./...
 	$(MAKE) executor-test

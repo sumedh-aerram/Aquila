@@ -77,6 +77,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-logs
+          retention-days: 14
           path: out/test-*.json
 
   compose-config:
@@ -119,14 +120,13 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Pair and sandbox tests (no skips allowed)
-        run: |
-          bash .github/scripts/go-test.sh - out/integration-pair.json go test -json -race -count=1 -run 'TestIntegration|TestPairUpFromTrees' ./internal/pair
-          bash .github/scripts/go-test.sh - out/integration-sandbox.json go test -json -race -count=1 ./internal/sandbox
+        run: make pair-integration sandbox-integration
       - name: Integration logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: integration-logs
+          retention-days: 14
           path: out/integration-*.json
 
   eval:
@@ -150,6 +150,8 @@ jobs:
     name: e2e
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      COMPOSE_PARALLEL_LIMIT: '2'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -158,7 +160,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Start demo and exercise checkout
-        run: make dev && make cli && make shop-smoke
+        run: make api-image && make dev && make cli && make shop-smoke
       - name: Positive D1 experiment
         run: |
           ./bin/aquila experiment -fixture -n 20 -f internal/pair/testdata/d1.diff -out e2e-d1.json
@@ -183,6 +185,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-evidence
+          retention-days: 14
           path: |
             e2e-d1.json
             e2e-d1.md

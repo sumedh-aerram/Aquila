@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -107,19 +108,11 @@ func TestPostgresListTraceWindow(t *testing.T) {
 }
 
 func TestPostgresListAttaches(t *testing.T) {
-	p := openTestPostgres(t)
+	p := openIsolatedTestPostgres(t)
 	h := sha256.Sum256([]byte(t.Name() + rand.Text()))
 	traceID := hex.EncodeToString(h[:16])
-	t.Cleanup(func() {
-		_, _ = p.pool.Exec(context.Background(), `DELETE FROM aquila.spans WHERE trace_id = $1`, traceID)
-	})
 	service := "ledger-test-" + rand.Text()
-	// ListAttaches has no service filter; place this fixture after existing data
-	// so its presence does not depend on the bounded list's current contents.
-	var now time.Time
-	if err := p.pool.QueryRow(t.Context(), `SELECT COALESCE(MAX(start_time), now()) + interval '1 second' FROM aquila.spans`).Scan(&now); err != nil {
-		t.Fatal(err)
-	}
+	now := time.Unix(50, 0).UTC()
 	if err := p.UpsertSpans(t.Context(), []Span{
 		{TraceID: traceID, SpanID: hex.EncodeToString(h[:8]), ServiceName: service, StartTime: now},
 		{TraceID: traceID, SpanID: hex.EncodeToString(h[8:16]), ServiceName: service, StartTime: now.Add(time.Second)},
@@ -137,7 +130,7 @@ func TestPostgresListAttaches(t *testing.T) {
 			break
 		}
 	}
-	if found.Spans != 2 || !found.LastSeen.Equal(now.Add(time.Second)) {
+	if len(got) != 1 || found.Spans != 2 || !found.LastSeen.Equal(now.Add(time.Second)) {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -165,4 +158,39 @@ func TestPostgresListTraceWindowServiceDropsOtherAttach(t *testing.T) {
 	if len(got) != 1 || got[0].TraceID != appID {
 		t.Fatalf("%+v", got)
 	}
+}
+
+// openIsolatedTestPostgres isolates queries that have no service filter or cursor.
+func openIsolatedTestPostgres(t *testing.T) *Postgres {
+	t.Helper()
+	admin := openTestPostgres(t).pool
+	name := "aquila_test_" + rand.Text()
+	quoted := pgx.Identifier{name}.Sanitize()
+	if _, err := admin.Exec(t.Context(), "CREATE DATABASE "+quoted+" TEMPLATE template0"); err != nil {
+		t.Fatalf("create test database (requires CREATEDB): %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(ctx, "DROP DATABASE "+quoted); err != nil {
+			t.Errorf("drop test database: %v", err)
+		}
+	})
+	cfg := admin.Config()
+	cfg.ConnConfig.Database = name
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	for _, migration := range []string{"000001_init.up.sql", "000002_spans.up.sql"} {
+		raw, err := os.ReadFile("../../migrations/" + migration)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(t.Context(), string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return NewPostgres(pool)
 }
