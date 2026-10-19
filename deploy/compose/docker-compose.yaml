@@ -19,16 +19,32 @@ services:
     networks:
       - aquila
 
-  migrate:
-    image: migrate/migrate:v4.18.3
+  migrate-schema:
+    image: postgres:16-alpine
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: aquila
+      PGPASSWORD: aquila
+      PGDATABASE: aquila
+    # migrate creates its version table before applying migration 1's schema DDL.
+    command: ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-c", "CREATE SCHEMA IF NOT EXISTS aquila"]
+    networks:
+      - aquila
+    restart: "no"
+
+  migrate:
+    image: migrate/migrate:v4.18.3
+    depends_on:
+      migrate-schema:
+        condition: service_completed_successfully
     volumes:
       - ../../migrations:/migrations:ro
     command:
       - -path=/migrations
-      - -database=postgres://aquila:aquila@postgres:5432/aquila?sslmode=disable
+      - -database=postgres://aquila:aquila@postgres:5432/aquila?sslmode=disable&x-migrations-table=%22aquila%22.%22schema_migrations%22&x-migrations-table-quoted=1
       - up
     networks:
       - aquila
