@@ -6,7 +6,7 @@ Last verified: 2026-10-18 at commit 08334eb (macOS arm64, Go 1.26.9, Docker Comp
 
 ## Prerequisites
 
-Use a clean checkout of this repository. Install Go matching `go.mod` (currently 1.26.9), Docker Engine/Desktop with Compose v2, GNU Make, Git, curl, jq, and a C++20 compiler. Allow local ports 8080, 8091, 15432, 18080, 18180, 18280, 4317, 4318, 9090, and 13000. The pair also creates separate Compose projects and volumes. From the repository root, check the Go toolchain and build the local CLI:
+Use a clean checkout of this repository. Install Go matching `go.mod` (currently 1.26.10), Docker Engine/Desktop with Compose v2, GNU Make, Git, curl, jq, and a C++20 compiler. Allow local ports 8080, 8091, 15432, 18080, 18180, 18280, 4317, 4318, 9090, and 13000. The pair also creates separate Compose projects and volumes. From the repository root, check the Go toolchain and build the local CLI:
 
 ```bash
 go version

@@ -1,6 +1,6 @@
 # Contributing
 
-Aquila is a Go control plane, a separate Go shop module, and a C++20 process supervisor. Read the [documentation index](docs/README.md), [architecture](docs/ARCHITECTURE.md), [invariants](docs/INVARIANTS.md), and [security boundary](docs/SECURITY.md) before changing an experiment path. Use a Go 1.26.9-compatible toolchain, GNU Make, a C++20 compiler, and Docker Compose for full integration work (`go.mod`, `examples/shop/go.mod`, `Makefile`, `executor/Makefile`).
+Aquila is a Go control plane, a separate Go shop module, and a C++20 process supervisor. Read the [documentation index](docs/README.md), [architecture](docs/ARCHITECTURE.md), [invariants](docs/INVARIANTS.md), and [security boundary](docs/SECURITY.md) before changing an experiment path. Use a Go 1.26.10-compatible toolchain, GNU Make, a C++20 compiler, and Docker Compose for full integration work (`go.mod`, `examples/shop/go.mod`, `Makefile`, `executor/Makefile`).
 
 ## Developer loop
 
