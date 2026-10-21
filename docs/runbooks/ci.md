@@ -15,7 +15,7 @@ The test wrapper `.github/scripts/go-test.sh` pipes Go JSON to `.github/scripts/
 
 ## Reproduce non-Docker gates locally
 
-From a checkout with Go 1.26.9, Make, a C++20 compiler, and dependencies available:
+From a checkout with Go 1.26.10, Make, a C++20 compiler, and dependencies available:
 
 ```bash
 go mod tidy -diff
