@@ -1,6 +1,6 @@
 module github.com/sumedhaerram/aquila/examples/shop
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/exaring/otelpgx v0.12.0
